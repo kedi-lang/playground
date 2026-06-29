@@ -7,6 +7,10 @@ export class BrowserModelRuntime {
     throw new Error("BrowserModelRuntime.generate must be implemented");
   }
 
+  async isCached(_config) {
+    return false;
+  }
+
   async unload() {}
 }
 

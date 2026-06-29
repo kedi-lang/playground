@@ -15,7 +15,8 @@ export class TransformersRuntime extends BrowserModelRuntime {
   }
 
   async load(config, onProgress, signal) {
-    const modelKey = `${config.model}:${config.dtype}:${config.device}`;
+    const fileOptions = modelFileOptions(config);
+    const modelKey = `${config.model}:${config.dtype}:${config.device}:${config.file ?? ""}`;
     if (this.model && this.modelKey === modelKey) {
       return;
     }
@@ -33,6 +34,7 @@ export class TransformersRuntime extends BrowserModelRuntime {
     const cached = await ModelRegistry.is_cached(config.model, {
       device: config.device,
       dtype: config.dtype,
+      ...fileOptions,
     });
     onProgress({
       phase: "runtime",
@@ -61,6 +63,7 @@ export class TransformersRuntime extends BrowserModelRuntime {
         ...options,
         device: config.device,
         dtype: config.dtype,
+        ...fileOptions,
       });
       this.tokenizer = tokenizer;
       this.model = model;
@@ -80,6 +83,21 @@ export class TransformersRuntime extends BrowserModelRuntime {
         this.loadController = null;
       }
     }
+  }
+
+  async isCached(config) {
+    const fileOptions = modelFileOptions(config);
+    const modelKey = `${config.model}:${config.dtype}:${config.device}:${config.file ?? ""}`;
+    if (this.model && this.modelKey === modelKey) {
+      return true;
+    }
+    const { ModelRegistry, env } = await import(MODULE_URL);
+    env.useBrowserCache = true;
+    return ModelRegistry.is_cached(config.model, {
+      device: config.device,
+      dtype: config.dtype,
+      ...fileOptions,
+    });
   }
 
   async generate({ messages, settings = {} }) {
@@ -129,6 +147,24 @@ export class TransformersRuntime extends BrowserModelRuntime {
   cancelLoad() {
     this.loadController?.abort();
   }
+}
+
+function modelFileOptions(config) {
+  if (!config.file) {
+    return {};
+  }
+  const path = config.file.replace(/^\/+/, "").replace(/\.onnx$/i, "");
+  const separator = path.lastIndexOf("/");
+  const subfolder = separator >= 0 ? path.slice(0, separator) : "";
+  let modelFileName = separator >= 0 ? path.slice(separator + 1) : path;
+  const dtypeSuffix = `_${config.dtype}`.toLowerCase();
+  if (modelFileName.toLowerCase().endsWith(dtypeSuffix)) {
+    modelFileName = modelFileName.slice(0, -dtypeSuffix.length);
+  }
+  return {
+    ...(subfolder ? { subfolder } : {}),
+    model_file_name: modelFileName,
+  };
 }
 
 function renderTransformersProgress(event, onProgress) {

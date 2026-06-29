@@ -31,7 +31,7 @@
         <aside class="run-pane">
           <div class="run-toolbar">
             <div class="actions">
-              <button id="run" class="primary" type="button">Run Kedi</button>
+              <button id="run" class="primary" type="button">Run</button>
               <button id="cancel" class="secondary" type="button" disabled>Cancel</button>
             </div>
             <span id="timing" class="metric">idle</span>
@@ -57,9 +57,20 @@
                 role="tab"
                 aria-selected="false"
                 aria-controls="model-settings-panel"
-                data-control-tab="model"
+                data-control-tab="settings"
               >
                 Model settings
+              </button>
+              <button
+                id="models-tab"
+                class="control-tab"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="models-panel"
+                data-control-tab="models"
+              >
+                Models
               </button>
             </div>
 
@@ -74,7 +85,7 @@
                 <div class="segmented">
                   <label>
                     <input type="radio" name="mode" value="local" checked />
-                    <span>Local WebGPU</span>
+                    <span>WebGPU</span>
                   </label>
                   <label>
                     <input type="radio" name="mode" value="byok" />
@@ -91,46 +102,40 @@
               </div>
 
               <div id="model-source-controls" class="source-controls">
-                <div class="mode-group">
-                  <span class="group-label">Source</span>
-                  <div class="segmented compact">
-                    <label data-source-option="cache">
-                      <input type="radio" name="model-source" value="cache" checked />
-                      <span>Browser cache</span>
-                    </label>
-                    <label data-source-option="file">
-                      <input type="radio" name="model-source" value="file" />
-                      <span>File</span>
-                    </label>
-                  </div>
-                </div>
-                <div class="source-actions">
-                  <button id="download-local" class="secondary" type="button">
-                    Cache model
-                  </button>
-                  <div id="file-picker" class="file-picker" hidden>
-                    <input
-                      id="model-file"
-                      class="file-input"
-                      type="file"
-                      accept=".gguf"
-                      aria-label="GGUF file"
-                    />
-                    <label for="model-file" class="file-button">Choose GGUF</label>
-                    <span id="model-file-name" class="file-name" aria-live="polite"></span>
-                  </div>
+                <button
+                  id="download-local"
+                  class="model-download"
+                  type="button"
+                  data-state="checking"
+                  disabled
+                >
+                  Checking
+                </button>
+                <div id="file-picker" class="file-picker">
+                  <input
+                    id="model-file"
+                    class="file-input"
+                    type="file"
+                    accept=".gguf"
+                    aria-label="GGUF file"
+                  />
+                  <label for="model-file" class="file-button">Choose GGUF</label>
+                  <span id="model-file-name" class="file-name" aria-live="polite"></span>
                 </div>
               </div>
 
               <div id="byok-controls" hidden>
                 <label class="field">
-                  <span>Model</span>
+                  <span>Builtin models</span>
                   <select id="byok-model"></select>
                 </label>
-                <label id="custom-model-field" class="field" hidden>
-                  <span>Custom model</span>
-                  <input id="custom-model" placeholder="provider/model-or-id" />
+                <label id="byok-custom-model-field" class="field" hidden>
+                  <span>Custom BYOK models</span>
+                  <select id="byok-custom-model"></select>
                 </label>
+                <button id="open-models-tab" class="inline-note" type="button">
+                  Can't find your model? Add a Pydantic-compatible model.
+                </button>
               </div>
             </div>
 
@@ -192,6 +197,72 @@
                 Reset
               </button>
             </div>
+
+            <div
+              id="models-panel"
+              class="control-panel models-panel"
+              role="tabpanel"
+              aria-labelledby="models-tab"
+              hidden
+            >
+              <section class="model-manager">
+                <div class="model-manager-heading">
+                  <h2>BYOK models</h2>
+                  <span>Pydantic AI</span>
+                </div>
+                <div class="model-form byok-model-form">
+                  <label class="field">
+                    <span>Display name</span>
+                    <input id="byok-model-label" placeholder="Fast" />
+                  </label>
+                  <label class="field model-id-field">
+                    <span>Model ID</span>
+                    <input
+                      id="byok-model-id"
+                      placeholder="openrouter:google/gemini-3-flash-preview"
+                    />
+                  </label>
+                  <button id="add-byok-model" class="secondary" type="button">Add</button>
+                </div>
+                <div id="byok-model-feedback" class="model-feedback" aria-live="polite"></div>
+                <div id="byok-model-list" class="model-list"></div>
+              </section>
+
+              <section class="model-manager">
+                <div class="model-manager-heading">
+                  <h2>WebGPU models</h2>
+                  <span>GGUF / ONNX</span>
+                </div>
+                <div class="model-form browser-model-form">
+                  <label class="field">
+                    <span>Display name</span>
+                    <input id="browser-model-label" placeholder="Small local" />
+                  </label>
+                  <label class="field">
+                    <span>Hugging Face repo</span>
+                    <input id="browser-model-repo" placeholder="organization/model" />
+                  </label>
+                  <label class="field model-file-field">
+                    <span>Model file</span>
+                    <input id="browser-model-file" placeholder="onnx/model_q4.onnx" />
+                  </label>
+                  <label class="field">
+                    <span>Dtype</span>
+                    <select id="browser-model-dtype">
+                      <option value="q2">q2</option>
+                      <option value="q4">q4</option>
+                      <option value="q4f16">q4f16</option>
+                      <option value="q8">q8</option>
+                      <option value="fp16">fp16</option>
+                      <option value="fp32">fp32</option>
+                    </select>
+                  </label>
+                  <button id="add-browser-model" class="secondary" type="button">Add</button>
+                </div>
+                <div id="browser-model-feedback" class="model-feedback" aria-live="polite"></div>
+                <div id="browser-model-list" class="model-list"></div>
+              </section>
+            </div>
           </section>
 
           <div class="progress-row" aria-live="polite">
@@ -240,6 +311,7 @@
             <input type="checkbox" data-env="LOGFIRE_ENABLED" />
             <span>Enable Logfire</span>
           </label>
+          <div id="env-feedback" class="model-feedback" role="alert" hidden></div>
           <div class="custom-env">
             <div class="custom-env-heading">
               <span>Custom variables</span>

@@ -3,24 +3,23 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
-import sys
 import threading
 from argparse import ArgumentParser
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, Literal, get_args
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from playground.bridge import BridgeManager
+from playground.execution import format_execution_output
 from playground.byok import run_byok
 from playground.models import MODEL_BY_ID, browser_model, public_model_registry
 
-ROOT = Path(__file__).resolve().parent
-STATIC_ROOT = ROOT / "static"
-REPO_ROOT = ROOT.parent
+PACKAGE_ROOT = Path(__file__).resolve().parent
+STATIC_ROOT = PACKAGE_ROOT / "static"
 BRIDGES = BridgeManager()
 POLL_SECONDS = 25
 _INTERNAL_BRIDGE_LOCK = threading.Lock()
@@ -45,9 +44,37 @@ class ModelSettingsPayload(BaseModel):
         return self.model_dump(exclude_none=True)
 
 
+class BrowserModelPayload(_CamelPayload):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    engine: Literal["wllama", "transformers"]
+    repo: str = Field(min_length=1)
+    file: str = Field(min_length=1)
+    model: str | None = None
+    dtype: Literal["q2", "q4", "q4f16", "q8", "fp16", "fp32"] | None = None
+    device: Literal["webgpu"] = "webgpu"
+
+    @model_validator(mode="after")
+    def validate_runtime_fields(self) -> BrowserModelPayload:
+        suffix = Path(self.file).suffix.lower()
+        if self.engine == "wllama" and suffix != ".gguf":
+            raise ValueError("wllama models require a .gguf file")
+        if self.engine == "transformers":
+            if suffix != ".onnx":
+                raise ValueError("Transformers.js models require a .onnx file")
+            if not self.dtype:
+                raise ValueError("Transformers.js models require a dtype")
+            if self.model != self.repo:
+                raise ValueError("Transformers.js model must match the repository")
+        return self
+
+
 class LocalRunPayload(_CamelPayload):
     source: str
     model_id: str = Field(alias="modelId")
+    browser_model: BrowserModelPayload | None = Field(default=None, alias="modelConfig")
     run_id: str = Field(alias="runId")
     settings: ModelSettingsPayload = Field(default_factory=ModelSettingsPayload)
 
@@ -58,6 +85,12 @@ class ByokRunPayload(BaseModel):
     run_id: str = Field(alias="runId")
     secrets: dict[str, str] = Field(default_factory=dict)
     settings: ModelSettingsPayload = Field(default_factory=ModelSettingsPayload)
+
+
+class PydanticModelValidationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(min_length=1)
 
 
 class CancelPayload(_CamelPayload):
@@ -77,40 +110,42 @@ class InternalBridgePayload(_CamelPayload):
     timeout: float = 60
 
 
-def _ensure_repo_importable() -> None:
-    src = REPO_ROOT / "src"
-    if str(src) not in sys.path:
-        sys.path.insert(0, str(src))
-
-
 def run_local(
     *,
     source: str,
     model_id: str,
+    custom_model: bool,
     run_id: str,
     settings: dict[str, Any],
 ) -> dict[str, Any]:
-    _ensure_repo_importable()
     from kedi.agent_adapter.webgpu import WebGPUAdapter
     from kedi.executors import PyodideExecutor
     from kedi.lang import compile_program, parse_program
 
-    browser_model(model_id)
+    supported_models = tuple(MODEL_BY_ID)
+    if custom_model:
+        supported_models = (*supported_models, model_id)
+    else:
+        browser_model(model_id)
     bridge = BRIDGES.get_or_create(run_id)
     program = parse_program(source, source_path="<playground>")
     adapter = WebGPUAdapter(
         bridge,
         model=model_id,
         model_settings=settings,
-        supported_models=tuple(MODEL_BY_ID),
+        supported_models=supported_models,
     )
+    executor = PyodideExecutor(bridge)
     runtime = compile_program(
         program,
         adapter=adapter,
-        executor=PyodideExecutor(bridge),
+        executor=executor,
     )
     result = runtime.run_main()
-    return {"ok": True, "result": "" if result is None else str(result)}
+    return {
+        "ok": True,
+        "result": format_execution_output(executor.drain_stdout(), result),
+    }
 
 
 @app.get("/api/health")
@@ -126,6 +161,15 @@ async def models() -> dict[str, Any]:
 @app.get("/api/byok/models")
 async def byok_models() -> dict[str, Any]:
     return {"ok": True, "models": _known_pydantic_models()}
+
+
+@app.post("/api/byok/models/validate")
+async def validate_byok_model(payload: PydanticModelValidationPayload) -> JSONResponse:
+    try:
+        model = _validate_pydantic_model_name(payload.model)
+        return JSONResponse({"ok": True, "model": model})
+    except Exception as exc:  # noqa: BLE001 - validation errors cross an API boundary.
+        return _error_response(exc)
 
 
 @app.get("/api/bridge/request")
@@ -182,10 +226,13 @@ async def cancel_run(payload: CancelPayload) -> dict[str, bool]:
 async def local_run(payload: LocalRunPayload) -> JSONResponse:
     bridge = BRIDGES.get_or_create(payload.run_id)
     try:
+        if payload.browser_model is not None and payload.browser_model.id != payload.model_id:
+            raise ValueError("Custom model ID does not match the selected model")
         result = await asyncio.to_thread(
             run_local,
             source=payload.source,
             model_id=payload.model_id,
+            custom_model=payload.browser_model is not None,
             run_id=payload.run_id,
             settings=payload.settings.as_dict(),
         )
@@ -247,6 +294,22 @@ def _known_pydantic_models() -> list[dict[str, str]]:
         label = f"{model_id} ({provider})" if separator else name
         models.append({"id": name, "label": label, "provider": provider})
     return models
+
+
+def _validate_pydantic_model_name(model: str) -> str:
+    from pydantic_ai.models import infer_model
+
+    model = model.strip()
+    provider, separator, model_name = model.partition(":")
+    if not separator or not provider or not model_name:
+        raise ValueError("Model ID must use provider:model format")
+    try:
+        infer_model(model)
+    except Exception as exc:
+        message = str(exc)
+        if message.startswith(("Unknown provider:", "Unknown model:")):
+            raise ValueError(message) from exc
+    return model
 
 
 app.mount("/", StaticFiles(directory=STATIC_ROOT, html=True), name="static")

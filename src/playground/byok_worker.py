@@ -8,6 +8,8 @@ import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Mapping
 
+from playground.execution import format_execution_output
+
 
 class HttpPyodideBridge:
     def __init__(self, *, url: str, run_id: str, token: str) -> None:
@@ -82,7 +84,10 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
     program = parse_program(source, source_path="<playground-byok>")
     runtime = compile_program(program, adapter=adapter, executor=executor)
     result = runtime.run_main()
-    return {"ok": True, "result": "" if result is None else str(result)}
+    return {
+        "ok": True,
+        "result": format_execution_output(executor.drain_stdout(), result),
+    }
 
 
 def main() -> None:

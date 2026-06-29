@@ -20,11 +20,14 @@ Then open <http://127.0.0.1:8787>.
 Environment values and `HF_TOKEN` are stored in browser local storage. BYOK
 runs pass the saved non-Hugging Face values to a short-lived worker process,
 without mutating the server environment. The BYOK model list is sourced from
-Pydantic AI's `KnownModelName`; custom model IDs are also accepted and
-normalized by Kedi before adapter construction.
+Pydantic AI's `KnownModelName`. The Models tab accepts labelled custom
+`provider:model` entries, checks their provider through Pydantic AI, and
+normalizes the selected ID before adapter construction.
 
-The selected execution mode, models, model source, custom model ID, and Kedi
-source are retained for the browser session. The Model settings tab exposes the
+The selected execution mode, models, custom model registries, and Kedi source
+are retained for the browser session. Custom browser models use a Hugging Face
+repository and model filename: `.gguf` selects wllama, while `.onnx` selects
+Transformers.js and exposes a dtype choice. The Model settings tab exposes the
 shared Pydantic AI and WebGPU controls: temperature, maximum output tokens,
 top-p, and an optional seed. These values are adapter defaults for the run;
 Kedi `> settings:` directives still override them inside their active scope.

@@ -8,7 +8,9 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_ROOT = Path(__file__).resolve().parent
+PLAYGROUND_ROOT = PACKAGE_ROOT.parents[1]
+REPOSITORY_ROOT = PLAYGROUND_ROOT.parent
 WORKER = Path(__file__).with_name("byok_worker.py")
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -46,7 +48,7 @@ def run_byok(
         input=payload,
         text=True,
         capture_output=True,
-        cwd=ROOT,
+        cwd=PLAYGROUND_ROOT,
         env=env,
         timeout=timeout,
         check=False,
@@ -83,7 +85,13 @@ def _worker_environment(
         if name in os.environ
     }
     kept["PYTHONPATH"] = os.pathsep.join(
-        value for value in (str(ROOT / "src"), kept.get("PYTHONPATH", "")) if value
+        value
+        for value in (
+            str(PLAYGROUND_ROOT / "src"),
+            str(REPOSITORY_ROOT / "src"),
+            kept.get("PYTHONPATH", ""),
+        )
+        if value
     )
     for name, value in secrets.items():
         if isinstance(value, str) and value:

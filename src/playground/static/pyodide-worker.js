@@ -4,6 +4,8 @@ const pyodidePromise = loadPyodide();
 
 const DRIVER = String.raw`
 import builtins
+import contextlib
+import io
 import json
 import traceback
 import types
@@ -137,15 +139,21 @@ def _execute_kedi_request(request):
     }
 
 
-try:
-    __kedi_response = _execute_kedi_request(json.loads(__kedi_request_json))
-except Exception as exc:
-    __kedi_response = {
-        "ok": False,
-        "errorType": type(exc).__name__,
-        "error": str(exc),
-        "traceback": traceback.format_exc(),
-    }
+__kedi_stdout = io.StringIO()
+__kedi_stderr = io.StringIO()
+with contextlib.redirect_stdout(__kedi_stdout), contextlib.redirect_stderr(__kedi_stderr):
+    try:
+        __kedi_response = _execute_kedi_request(json.loads(__kedi_request_json))
+    except Exception as exc:
+        __kedi_response = {
+            "ok": False,
+            "errorType": type(exc).__name__,
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+__kedi_response["stdout"] = __kedi_stdout.getvalue()
+__kedi_response["stderr"] = __kedi_stderr.getvalue()
 
 json.dumps(__kedi_response)
 `;

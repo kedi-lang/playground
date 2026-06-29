@@ -1,5 +1,5 @@
 import { AdapterClient, fetchJSON } from "./adapter-client.js";
-import { MODEL_REGISTRY, modelConfig } from "./model-registry.js";
+import { MODEL_REGISTRY, modelConfig as builtinModelConfig } from "./model-registry.js";
 import { assertWebGPU, formatBytes } from "./runtimes/runtime.js";
 import { TransformersRuntime } from "./runtimes/transformers-runtime.js";
 import { WllamaRuntime } from "./runtimes/wllama-runtime.js";
@@ -24,8 +24,8 @@ const ui = {
   byokControls: document.querySelector("#byok-controls"),
   localControls: document.querySelector("#local-controls"),
   byokModel: document.querySelector("#byok-model"),
-  customModelField: document.querySelector("#custom-model-field"),
-  customModel: document.querySelector("#custom-model"),
+  byokCustomModelField: document.querySelector("#byok-custom-model-field"),
+  byokCustomModel: document.querySelector("#byok-custom-model"),
   sourceControls: document.querySelector("#model-source-controls"),
   modelFile: document.querySelector("#model-file"),
   modelFileName: document.querySelector("#model-file-name"),
@@ -38,40 +38,56 @@ const ui = {
   timing: document.querySelector("#timing"),
   statusDot: document.querySelector(".status-dot"),
   envDialog: document.querySelector("#env-dialog"),
+  envFeedback: document.querySelector("#env-feedback"),
   customEnvList: document.querySelector("#custom-env-list"),
-  fileSourceOption: document.querySelector('[data-source-option="file"]'),
   runSettingsPanel: document.querySelector("#run-settings-panel"),
   modelSettingsPanel: document.querySelector("#model-settings-panel"),
+  modelsPanel: document.querySelector("#models-panel"),
   settingTemperature: document.querySelector("#setting-temperature"),
   settingMaxTokens: document.querySelector("#setting-max-tokens"),
   settingTopP: document.querySelector("#setting-top-p"),
   settingSeed: document.querySelector("#setting-seed"),
   resetModelSettings: document.querySelector("#reset-model-settings"),
+  byokModelLabel: document.querySelector("#byok-model-label"),
+  byokModelId: document.querySelector("#byok-model-id"),
+  addByokModel: document.querySelector("#add-byok-model"),
+  byokModelFeedback: document.querySelector("#byok-model-feedback"),
+  byokModelList: document.querySelector("#byok-model-list"),
+  browserModelLabel: document.querySelector("#browser-model-label"),
+  browserModelRepo: document.querySelector("#browser-model-repo"),
+  browserModelFile: document.querySelector("#browser-model-file"),
+  browserModelDtype: document.querySelector("#browser-model-dtype"),
+  addBrowserModel: document.querySelector("#add-browser-model"),
+  browserModelFeedback: document.querySelector("#browser-model-feedback"),
+  browserModelList: document.querySelector("#browser-model-list"),
 };
 
 let activeRuntime = null;
-let activeModelId = null;
+let activeRuntimeKey = null;
 let activeRun = null;
 let activeDownload = null;
+let activeModelSource = "cache";
+let cacheCheckId = 0;
 
 const initialSession = sessionValues();
+let customByokModels = Array.isArray(initialSession.customByokModels)
+  ? initialSession.customByokModels.filter(isByokModel)
+  : [];
+let customBrowserModels = Array.isArray(initialSession.customBrowserModels)
+  ? initialSession.customBrowserModels.filter(isBrowserModel)
+  : [];
+let activeByokModelSource =
+  initialSession.byokModelSource === "custom" && customByokModels.length
+    ? "custom"
+    : "builtin";
 ui.source.value = initialSession.source || DEFAULT_SOURCE;
-for (const model of Object.values(MODEL_REGISTRY)) {
-  ui.model.add(new Option(model.label, model.id));
-}
-if (MODEL_REGISTRY[initialSession.browserModel]) {
-  ui.model.value = initialSession.browserModel;
-}
-const initialModelSource = initialSession.modelSource === "file" ? "file" : "cache";
-const initialSource = document.querySelector(
-  `input[name="model-source"][value="${initialModelSource}"]`,
-);
-if (initialSource) {
-  initialSource.checked = true;
-}
-ui.customModel.value = initialSession.customModel || "";
+renderBrowserModelOptions(initialSession.browserModel);
+renderCustomByokModels(initialSession.byokCustomModel);
+renderCustomBrowserModels();
 applyModelSettings(initialSession.modelSettings);
-setControlTab(initialSession.controlTab === "model" ? "model" : "run");
+const initialControlTab =
+  initialSession.controlTab === "model" ? "settings" : initialSession.controlTab;
+setControlTab(["run", "settings", "models"].includes(initialControlTab) ? initialControlTab : "run");
 installHuggingFaceAuth();
 bindEvents();
 const initialMode = initialSession.mode === "byok" ? "byok" : "local";
@@ -93,31 +109,14 @@ function bindEvents() {
       saveSession({ mode: input.value });
     });
   }
-  ui.model.addEventListener("change", async () => {
-    if (activeRuntime && activeModelId !== ui.model.value) {
-      await activeRuntime.unload();
-      activeRuntime = null;
-      activeModelId = null;
-    }
-    setStatus("Ready");
-    setProgress("");
-    updateSourceControls();
-    saveSession({ browserModel: ui.model.value });
-  });
-  for (const input of document.querySelectorAll('input[name="model-source"]')) {
-    input.addEventListener("change", () => {
-      setStatus("Ready");
-      setProgress("");
-      updateSourceControls();
-      saveSession({ modelSource: input.value });
-    });
-  }
+  ui.model.addEventListener("change", handleBrowserModelChange);
   ui.modelFile.addEventListener("change", () => {
     const file = ui.modelFile.files?.[0];
     ui.modelFileName.textContent = file?.name || "";
     if (file) {
-      document.querySelector('input[name="model-source"][value="file"]').checked = true;
-      saveSession({ modelSource: "file" });
+      activeModelSource = "file";
+      setStatus("Local GGUF selected");
+      setProgress("");
       updateSourceControls();
     }
   });
@@ -125,17 +124,39 @@ function bindEvents() {
   ui.run.addEventListener("click", run);
   ui.cancel.addEventListener("click", cancel);
   document.querySelector("#open-env").addEventListener("click", openEnv);
-  document.querySelector("#close-env").addEventListener("click", () => ui.envDialog.close());
+  document.querySelector("#close-env").addEventListener("click", closeEnv);
   document.querySelector("#save-env").addEventListener("click", saveEnv);
   document.querySelector("#clear-env").addEventListener("click", clearEnv);
   document.querySelector("#add-env").addEventListener("click", () => addCustomEnvRow());
+  for (const input of ui.envDialog.querySelectorAll(
+    '[data-env="LOGFIRE_ENABLED"], [data-env="LOGFIRE_TOKEN"]',
+  )) {
+    input.addEventListener("input", clearEnvFeedback);
+  }
+  ui.byokModel.addEventListener("focus", () => activateByokModelSource("builtin"));
   ui.byokModel.addEventListener("change", () => {
-    updateCustomModelField();
-    saveSession({ byokModel: ui.byokModel.value });
+    activateByokModelSource("builtin");
+    saveSession({
+      byokBuiltinModel: ui.byokModel.value,
+    });
   });
-  ui.customModel.addEventListener("input", () => {
-    saveSession({ customModel: ui.customModel.value });
+  ui.byokCustomModel.addEventListener("focus", () =>
+    activateByokModelSource("custom"),
+  );
+  ui.byokCustomModel.addEventListener("change", () => {
+    activateByokModelSource("custom");
+    saveSession({
+      byokCustomModel: ui.byokCustomModel.value,
+    });
   });
+  document.querySelector("#open-models-tab").addEventListener("click", () => {
+    setControlTab("models");
+    saveSession({ controlTab: "models" });
+    ui.byokModelLabel.focus();
+  });
+  ui.addByokModel.addEventListener("click", addByokModel);
+  ui.addBrowserModel.addEventListener("click", addBrowserModel);
+  ui.browserModelFile.addEventListener("input", updateBrowserDtypeState);
   ui.source.addEventListener("input", () => {
     saveSession({ source: ui.source.value });
   });
@@ -164,11 +185,12 @@ function setMode(mode) {
 }
 
 function setControlTab(tabName) {
-  const modelTab = tabName === "model";
-  ui.runSettingsPanel.hidden = modelTab;
-  ui.modelSettingsPanel.hidden = !modelTab;
+  const activeTab = ["run", "settings", "models"].includes(tabName) ? tabName : "run";
+  ui.runSettingsPanel.hidden = activeTab !== "run";
+  ui.modelSettingsPanel.hidden = activeTab !== "settings";
+  ui.modelsPanel.hidden = activeTab !== "models";
   for (const tab of document.querySelectorAll("[data-control-tab]")) {
-    const active = tab.dataset.controlTab === (modelTab ? "model" : "run");
+    const active = tab.dataset.controlTab === activeTab;
     tab.classList.toggle("active", active);
     tab.setAttribute("aria-selected", String(active));
   }
@@ -196,13 +218,17 @@ async function run() {
 async function runLocal() {
   await assertWebGPU();
   const modelId = ui.model.value;
-  const config = selectedRuntimeConfig(modelConfig(modelId));
+  const baseConfig = browserModelConfig(modelId);
+  const config = selectedRuntimeConfig(baseConfig);
   const runtime = await runtimeFor(config);
   const runId = crypto.randomUUID();
   const controller = new AbortController();
   activeRun = { runId, controller, bridgeStarted: false };
   setStatus("Loading model");
   await runtime.load(config, renderProgress, controller.signal);
+  if (config.source === "cache") {
+    setDownloadState(true);
+  }
   setProgress("Model loaded");
   setStatus("Running Kedi");
 
@@ -216,6 +242,7 @@ async function runLocal() {
       body: JSON.stringify({
         source: ui.source.value,
         modelId,
+        modelConfig: MODEL_REGISTRY[modelId] ? null : baseConfig,
         runId,
         settings: modelSettings(),
       }),
@@ -230,8 +257,8 @@ async function runLocal() {
 
 async function runByok() {
   const model =
-    ui.byokModel.value === "__custom__"
-      ? ui.customModel.value.trim()
+    activeByokModelSource === "custom"
+      ? ui.byokCustomModel.value
       : ui.byokModel.value;
   if (!model) {
     throw new Error("Enter a BYOK model");
@@ -303,61 +330,228 @@ async function cancel() {
   setRunning(false);
 }
 
+async function handleBrowserModelChange() {
+  if (activeRuntime) {
+    await activeRuntime.unload();
+    activeRuntime = null;
+    activeRuntimeKey = null;
+  }
+  activeModelSource = "cache";
+  ui.modelFile.value = "";
+  ui.modelFileName.textContent = "";
+  setStatus("Ready");
+  setProgress("");
+  updateSourceControls();
+  saveSession({ browserModel: ui.model.value });
+}
+
+function browserModelConfig(modelId) {
+  const custom = customBrowserModels.find((model) => model.id === modelId);
+  return custom ?? builtinModelConfig(modelId);
+}
+
+function renderBrowserModelOptions(preferredId) {
+  const selectedId = preferredId || ui.model.value;
+  ui.model.replaceChildren();
+
+  const builtinGroup = document.createElement("optgroup");
+  builtinGroup.label = "Builtin models";
+  for (const model of Object.values(MODEL_REGISTRY)) {
+    builtinGroup.append(new Option(model.label, model.id));
+  }
+  ui.model.append(builtinGroup);
+
+  if (customBrowserModels.length) {
+    const customGroup = document.createElement("optgroup");
+    customGroup.label = "Custom WebGPU models";
+    for (const model of customBrowserModels) {
+      customGroup.append(new Option(model.label, model.id));
+    }
+    ui.model.append(customGroup);
+  }
+
+  const preferred = [...ui.model.options].find((option) => option.value === selectedId);
+  if (preferred) {
+    ui.model.value = preferred.value;
+  }
+}
+
+function renderCustomBrowserModels() {
+  ui.browserModelList.replaceChildren();
+  for (const model of customBrowserModels) {
+    appendModelRow(
+      ui.browserModelList,
+      model.label,
+      `${model.engine} | ${model.repo}/${model.file}`,
+      () => removeBrowserModel(model.id),
+    );
+  }
+}
+
+async function addBrowserModel() {
+  const label = ui.browserModelLabel.value.trim();
+  const repo = ui.browserModelRepo.value.trim();
+  const file = ui.browserModelFile.value.trim();
+  const lowerFile = file.toLowerCase();
+  if (!label || !repo || !file) {
+    setModelFeedback(ui.browserModelFeedback, "Display name, repo, and file are required.", "error");
+    return;
+  }
+  const engine = lowerFile.endsWith(".gguf")
+    ? "wllama"
+    : lowerFile.endsWith(".onnx")
+      ? "transformers"
+      : null;
+  if (!engine) {
+    setModelFeedback(ui.browserModelFeedback, "Model file must end in .gguf or .onnx.", "error");
+    return;
+  }
+
+  const dtype = ui.browserModelDtype.value;
+  const existing = customBrowserModels.find(
+    (model) =>
+      model.repo === repo &&
+      model.file === file &&
+      (engine === "wllama" || model.dtype === dtype),
+  );
+  const model = {
+    id: existing?.id ?? `custom-webgpu-${crypto.randomUUID()}`,
+    kind: "webgpu",
+    label,
+    engine,
+    repo,
+    file,
+    device: "webgpu",
+    ...(engine === "transformers" ? { model: repo, dtype } : {}),
+  };
+  customBrowserModels = existing
+    ? customBrowserModels.map((item) => (item.id === existing.id ? model : item))
+    : [...customBrowserModels, model];
+  saveSession({ customBrowserModels, browserModel: model.id });
+  renderBrowserModelOptions(model.id);
+  renderCustomBrowserModels();
+  await handleBrowserModelChange();
+  ui.browserModelLabel.value = "";
+  ui.browserModelRepo.value = "";
+  ui.browserModelFile.value = "";
+  updateBrowserDtypeState();
+  setModelFeedback(ui.browserModelFeedback, `${label} added.`, "success");
+}
+
+async function removeBrowserModel(modelId) {
+  const removingSelected = ui.model.value === modelId;
+  customBrowserModels = customBrowserModels.filter((model) => model.id !== modelId);
+  saveSession({ customBrowserModels });
+  renderBrowserModelOptions(removingSelected ? undefined : ui.model.value);
+  renderCustomBrowserModels();
+  if (removingSelected) {
+    await handleBrowserModelChange();
+  }
+}
+
+function updateBrowserDtypeState() {
+  const gguf = ui.browserModelFile.value.trim().toLowerCase().endsWith(".gguf");
+  ui.browserModelDtype.disabled = gguf;
+}
+
 async function runtimeFor(config) {
-  if (activeRuntime && activeModelId === config.id) {
+  const key = runtimeKey(config);
+  if (activeRuntime && activeRuntimeKey === key) {
     return activeRuntime;
   }
   await activeRuntime?.unload();
-  activeRuntime = config.engine === "wllama" ? new WllamaRuntime() : new TransformersRuntime();
-  activeModelId = config.id;
+  activeRuntime = createRuntime(config);
+  activeRuntimeKey = key;
   return activeRuntime;
 }
 
 function selectedRuntimeConfig(config) {
-  const source = selectedModelSource();
-  if (config.engine === "transformers") {
-    if (source === "file") {
-      throw new Error("File source is only available for GGUF models");
-    }
-    return {
-      ...config,
-      source: "cache",
-    };
-  }
-  if (source === "file") {
+  if (activeModelSource === "file") {
     const fileObject = ui.modelFile.files?.[0];
     if (!fileObject) {
       throw new Error("Choose a GGUF file");
     }
-    return { ...config, source, fileObject };
+    return {
+      ...config,
+      engine: "wllama",
+      file: fileObject.name,
+      source: "file",
+      fileObject,
+    };
   }
   return { ...config, source: "cache" };
 }
 
-function selectedModelSource() {
-  return document.querySelector('input[name="model-source"]:checked')?.value ?? "cache";
+function updateSourceControls() {
+  ui.sourceControls.hidden = selectedMode() !== "local";
+  ui.modelFile.disabled = false;
+  ui.filePicker.hidden = false;
+  ui.filePicker.dataset.active = String(activeModelSource === "file");
+  void refreshDownloadState();
 }
 
-function updateSourceControls() {
-  const config = modelConfig(ui.model.value);
-  const wllama = config.engine === "wllama";
-  const source = selectedModelSource();
-  ui.sourceControls.hidden = selectedMode() !== "local";
-  ui.fileSourceOption.hidden = !wllama;
-  ui.modelFile.disabled = !wllama;
-  ui.filePicker.hidden = !wllama || source !== "file";
-  ui.downloadLocal.hidden = source === "file";
-  ui.downloadLocal.textContent = "Cache model";
-  if (!wllama && selectedModelSource() === "file") {
-    document.querySelector('input[name="model-source"][value="cache"]').checked = true;
-    ui.filePicker.hidden = true;
-    ui.downloadLocal.hidden = false;
-    saveSession({ modelSource: "cache" });
+function createRuntime(config) {
+  return config.engine === "wllama" ? new WllamaRuntime() : new TransformersRuntime();
+}
+
+function runtimeKey(config) {
+  if (config.source === "file" && config.fileObject) {
+    const file = config.fileObject;
+    return `wllama:file:${file.name}:${file.size}:${file.lastModified}`;
+  }
+  return `${config.engine}:cache:${config.id}`;
+}
+
+async function refreshDownloadState() {
+  if (selectedMode() !== "local") {
+    return;
+  }
+  const checkId = ++cacheCheckId;
+  const config = browserModelConfig(ui.model.value);
+  setDownloadState(null);
+  const cacheConfig = { ...config, source: "cache" };
+  const runtime =
+    activeRuntime && activeRuntimeKey === runtimeKey(cacheConfig)
+      ? activeRuntime
+      : createRuntime(cacheConfig);
+  const temporary = runtime !== activeRuntime;
+  try {
+    const cached = await runtime.isCached(config);
+    if (checkId === cacheCheckId) {
+      setDownloadState(cached);
+    }
+  } catch {
+    if (checkId === cacheCheckId) {
+      setDownloadState(false);
+    }
+  } finally {
+    if (temporary) {
+      await runtime.unload();
+    }
   }
 }
 
+function setDownloadState(cached) {
+  if (cached === null) {
+    ui.downloadLocal.textContent = "Checking";
+    ui.downloadLocal.dataset.state = "checking";
+    ui.downloadLocal.disabled = true;
+    return;
+  }
+  ui.downloadLocal.textContent = cached ? "Downloaded" : "Download";
+  ui.downloadLocal.dataset.state = cached ? "downloaded" : "download";
+  ui.downloadLocal.disabled = false;
+}
+
 async function cacheModel() {
-  const config = modelConfig(ui.model.value);
+  const config = browserModelConfig(ui.model.value);
+  activeModelSource = "cache";
+  ui.filePicker.dataset.active = "false";
+  if (ui.downloadLocal.dataset.state === "downloaded") {
+    setStatus("Using downloaded model");
+    setProgress("");
+    return;
+  }
   const download = {
     controller: new AbortController(),
   };
@@ -375,6 +569,7 @@ async function cacheModel() {
     );
     setStatus("Model loaded");
     setProgress("Stored in this browser");
+    setDownloadState(true);
   } catch (error) {
     if (error?.name === "AbortError") {
       return;
@@ -386,7 +581,7 @@ async function cacheModel() {
       activeDownload = null;
       setRunning(false);
     }
-    ui.downloadLocal.disabled = false;
+    void refreshDownloadState();
   }
 }
 
@@ -519,6 +714,7 @@ function openEnv() {
     }
   }
   renderCustomEnv(values);
+  clearEnvFeedback();
   ui.envDialog.showModal();
 }
 
@@ -538,9 +734,31 @@ function saveEnv() {
       values[name] = value;
     }
   }
+  if (values.LOGFIRE_ENABLED === "true" && !values.LOGFIRE_TOKEN) {
+    setEnvFeedback("Add LOGFIRE_TOKEN before enabling Logfire.");
+    ui.envDialog.querySelector('[data-env="LOGFIRE_TOKEN"]').focus();
+    return;
+  }
   localStorage.setItem(ENV_KEY, JSON.stringify(values));
+  clearEnvFeedback();
   ui.envDialog.close();
   setStatus("Environment saved");
+}
+
+function closeEnv() {
+  clearEnvFeedback();
+  ui.envDialog.close();
+}
+
+function setEnvFeedback(message) {
+  ui.envFeedback.textContent = message;
+  ui.envFeedback.dataset.state = "error";
+  ui.envFeedback.hidden = false;
+}
+
+function clearEnvFeedback() {
+  ui.envFeedback.textContent = "";
+  ui.envFeedback.hidden = true;
 }
 
 function clearEnv() {
@@ -550,7 +768,31 @@ function clearEnv() {
     input.checked = false;
   }
   ui.customEnvList.replaceChildren();
+  clearEnvFeedback();
   setStatus("Environment cleared");
+}
+
+function isByokModel(model) {
+  return (
+    model &&
+    typeof model === "object" &&
+    (model.kind === undefined || model.kind === "byok") &&
+    typeof model.label === "string" &&
+    typeof model.model === "string"
+  );
+}
+
+function isBrowserModel(model) {
+  return (
+    model &&
+    typeof model === "object" &&
+    (model.kind === undefined || model.kind === "webgpu") &&
+    typeof model.id === "string" &&
+    typeof model.label === "string" &&
+    typeof model.repo === "string" &&
+    typeof model.file === "string" &&
+    (model.engine === "wllama" || model.engine === "transformers")
+  );
 }
 
 async function loadByokModels() {
@@ -559,23 +801,147 @@ async function loadByokModels() {
     for (const model of payload.models) {
       ui.byokModel.add(new Option(model.label, model.id));
     }
-    ui.byokModel.add(new Option("Custom model...", "__custom__"));
-    const preferredId = initialSession.byokModel || "openai:gpt-4o-mini";
+    const preferredId =
+      initialSession.byokBuiltinModel ||
+      initialSession.byokModel ||
+      "openai:gpt-4o-mini";
     const preferred = [...ui.byokModel.options].find(
       (option) => option.value === preferredId,
     );
     if (preferred) {
       ui.byokModel.value = preferred.value;
     }
-    updateCustomModelField();
+    updateByokModelSelection();
   } catch (error) {
     setStatus("Model list failed");
     setProgress(error?.message ?? String(error));
   }
 }
 
-function updateCustomModelField() {
-  ui.customModelField.hidden = ui.byokModel.value !== "__custom__";
+async function addByokModel() {
+  const label = ui.byokModelLabel.value.trim();
+  const modelId = ui.byokModelId.value.trim();
+  if (!label || !modelId) {
+    setModelFeedback(ui.byokModelFeedback, "Display name and model ID are required.", "error");
+    return;
+  }
+
+  ui.addByokModel.disabled = true;
+  setModelFeedback(ui.byokModelFeedback, "Checking provider...");
+  try {
+    const result = await fetchJSON("/api/byok/models/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: modelId }),
+    });
+    const model = { kind: "byok", label, model: result.model };
+    const existing = customByokModels.find((item) => item.model === result.model);
+    customByokModels = existing
+      ? customByokModels.map((item) => (item.model === result.model ? model : item))
+      : [...customByokModels, model];
+    activeByokModelSource = "custom";
+    saveSession({
+      customByokModels,
+      byokModelSource: "custom",
+      byokCustomModel: result.model,
+    });
+    renderCustomByokModels(result.model);
+    ui.byokModelLabel.value = "";
+    ui.byokModelId.value = "";
+    setModelFeedback(ui.byokModelFeedback, `${label} added.`, "success");
+  } catch (error) {
+    setModelFeedback(
+      ui.byokModelFeedback,
+      error?.message ?? String(error),
+      "error",
+    );
+  } finally {
+    ui.addByokModel.disabled = false;
+  }
+}
+
+function removeByokModel(modelId) {
+  const removingSelected =
+    activeByokModelSource === "custom" && ui.byokCustomModel.value === modelId;
+  customByokModels = customByokModels.filter((model) => model.model !== modelId);
+  if (removingSelected || !customByokModels.length) {
+    activeByokModelSource = "builtin";
+  }
+  saveSession({
+    customByokModels,
+    byokModelSource: activeByokModelSource,
+  });
+  renderCustomByokModels();
+}
+
+function renderCustomByokModels(preferredId) {
+  ui.byokCustomModel.replaceChildren();
+  for (const model of customByokModels) {
+    ui.byokCustomModel.add(new Option(model.label, model.model));
+  }
+  ui.byokCustomModelField.hidden = !customByokModels.length;
+  const selectedId = preferredId || initialSession.byokCustomModel;
+  const preferred = [...ui.byokCustomModel.options].find(
+    (option) => option.value === selectedId,
+  );
+  if (preferred) {
+    ui.byokCustomModel.value = preferred.value;
+  }
+  if (!customByokModels.length) {
+    activeByokModelSource = "builtin";
+  }
+  updateByokModelSelection();
+
+  ui.byokModelList.replaceChildren();
+  for (const model of customByokModels) {
+    appendModelRow(
+      ui.byokModelList,
+      model.label,
+      model.model,
+      () => removeByokModel(model.model),
+    );
+  }
+}
+
+function updateByokModelSelection() {
+  ui.byokModel.dataset.active = String(activeByokModelSource === "builtin");
+  ui.byokCustomModel.dataset.active = String(activeByokModelSource === "custom");
+}
+
+function activateByokModelSource(source) {
+  if (source === "custom" && !customByokModels.length) {
+    return;
+  }
+  activeByokModelSource = source;
+  updateByokModelSelection();
+  saveSession({ byokModelSource: source });
+}
+
+function appendModelRow(container, label, modelId, onRemove) {
+  const row = document.createElement("div");
+  row.className = "model-list-row";
+
+  const labelElement = document.createElement("span");
+  labelElement.className = "model-list-label";
+  labelElement.textContent = label;
+
+  const idElement = document.createElement("span");
+  idElement.className = "model-list-id";
+  idElement.textContent = modelId;
+  idElement.title = modelId;
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", onRemove);
+
+  row.append(labelElement, idElement, remove);
+  container.append(row);
+}
+
+function setModelFeedback(element, message, state = "") {
+  element.textContent = message;
+  element.dataset.state = state;
 }
 
 function renderCustomEnv(values) {

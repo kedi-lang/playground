@@ -11,6 +11,7 @@ import pytest
 
 from playground import byok, server
 from playground.bridge import BridgeCancelled, BridgeManager, BridgeRun
+from playground.execution import format_execution_output
 from playground.models import browser_model, public_model_registry
 
 
@@ -59,6 +60,108 @@ def test_model_settings_payload_accepts_only_shared_adapter_settings() -> None:
         server.ModelSettingsPayload(temperature=1.01)
     with pytest.raises(ValueError):
         server.ModelSettingsPayload.model_validate({"frequency_penalty": 1})
+
+
+def test_custom_browser_model_payload_validates_runtime_contract() -> None:
+    gguf = server.BrowserModelPayload(
+        id="custom-gguf",
+        label="Local",
+        engine="wllama",
+        repo="organization/model",
+        file="model.gguf",
+    )
+    onnx = server.BrowserModelPayload(
+        id="custom-onnx",
+        label="Browser",
+        engine="transformers",
+        repo="organization/model",
+        file="onnx/model_q4.onnx",
+        model="organization/model",
+        dtype="q4",
+    )
+
+    assert gguf.device == "webgpu"
+    assert onnx.dtype == "q4"
+    with pytest.raises(ValueError, match=r"\.gguf"):
+        server.BrowserModelPayload(
+            id="bad",
+            label="Bad",
+            engine="wllama",
+            repo="organization/model",
+            file="model.onnx",
+        )
+    with pytest.raises(ValueError, match=r"\.onnx"):
+        server.BrowserModelPayload(
+            id="bad",
+            label="Bad",
+            engine="transformers",
+            repo="organization/model",
+            file="model.gguf",
+            model="organization/model",
+            dtype="q4",
+        )
+    with pytest.raises(ValueError, match="dtype"):
+        server.BrowserModelPayload(
+            id="bad",
+            label="Bad",
+            engine="transformers",
+            repo="organization/model",
+            file="model.onnx",
+            model="organization/model",
+        )
+    with pytest.raises(ValueError, match="match the repository"):
+        server.BrowserModelPayload(
+            id="bad",
+            label="Bad",
+            engine="transformers",
+            repo="organization/model",
+            file="model.onnx",
+            model="other/model",
+            dtype="q4",
+        )
+
+
+def test_pydantic_model_name_validation_uses_infer_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic_ai import models
+
+    seen: list[str] = []
+
+    def accept(model: str) -> object:
+        seen.append(model)
+        return object()
+
+    monkeypatch.setattr(models, "infer_model", accept)
+    assert (
+        server._validate_pydantic_model_name(" openrouter:google/gemini-3-flash-preview ")
+        == "openrouter:google/gemini-3-flash-preview"
+    )
+    assert seen == ["openrouter:google/gemini-3-flash-preview"]
+
+    monkeypatch.setattr(
+        models,
+        "infer_model",
+        lambda _model: (_ for _ in ()).throw(RuntimeError("API key required")),
+    )
+    assert server._validate_pydantic_model_name("openai:gpt-4o-mini") == ("openai:gpt-4o-mini")
+
+    monkeypatch.setattr(
+        models,
+        "infer_model",
+        lambda _model: (_ for _ in ()).throw(ValueError("Unknown provider: nope")),
+    )
+    with pytest.raises(ValueError, match="Unknown provider"):
+        server._validate_pydantic_model_name("nope:model")
+    with pytest.raises(ValueError, match="provider:model"):
+        server._validate_pydantic_model_name("missing-provider")
+
+
+def test_execution_output_preserves_stdout_and_return_values() -> None:
+    assert format_execution_output("The Zen\n", None) == "The Zen\n"
+    assert format_execution_output("", "done") == "done"
+    assert format_execution_output("printed", "done") == "printed\ndone"
+    assert format_execution_output("printed\n", "done") == "printed\ndone"
 
 
 def test_bridge_request_response_and_duplicate_rejection() -> None:
@@ -183,6 +286,16 @@ def test_byok_worker_contract_and_invalid_output(monkeypatch: pytest.MonkeyPatch
         )
 
 
+def test_byok_worker_runs_as_a_real_subprocess() -> None:
+    result = _run_byok(
+        source="= ok",
+        model="test",
+        secrets={},
+    )
+
+    assert result == {"ok": True, "result": "ok"}
+
+
 def test_model_downloads_are_browser_owned() -> None:
     static = Path(server.__file__).parent / "static"
     app_source = (static / "app.js").read_text(encoding="utf-8")
@@ -201,12 +314,39 @@ def test_model_downloads_are_browser_owned() -> None:
     assert "useCache: true" in wllama_source
     assert "`model:${config.id}`" in wllama_source
     assert "env.useBrowserCache = true" in transformers_source
+    assert "async isCached(config)" in transformers_source
+    assert "async isCached(config)" in wllama_source
     assert "this.random.seed(Number(settings.seed))" in transformers_source
-    assert 'name="model-source" value="cache" checked' in index_source
-    assert 'name="model-source" value="hf"' not in index_source
+    assert "contextlib.redirect_stdout" in (static / "pyodide-worker.js").read_text(
+        encoding="utf-8"
+    )
+    assert 'id="download-local"' in index_source
+    assert 'data-state="checking"' in index_source
+    assert 'name="model-source"' not in index_source
+    assert "Browser cache" not in index_source
+    assert '"Downloaded" : "Download"' in app_source
     assert 'class="file-input"' in index_source
     assert 'for="model-file" class="file-button"' in index_source
-    assert 'data-control-tab="model"' in index_source
+    assert '<button id="run" class="primary" type="button">Run</button>' in index_source
+    assert "<span>WebGPU</span>" in index_source
+    assert "<span>Custom BYOK models</span>" in index_source
+    assert '<div id="file-picker" class="file-picker">' in index_source
+    assert 'customGroup.label = "Custom WebGPU models"' in app_source
+    assert 'kind: "byok"' in app_source
+    assert 'kind: "webgpu"' in app_source
+    assert "Add LOGFIRE_TOKEN before enabling Logfire." in app_source
+    assert 'id="env-feedback"' in index_source
+    assert 'data-control-tab="settings"' in index_source
+    assert 'data-control-tab="models"' in index_source
+    assert 'id="byok-custom-model"' in index_source
+    assert 'id="byok-model-id"' in index_source
+    assert 'id="browser-model-repo"' in index_source
+    assert 'id="browser-model-file"' in index_source
+    assert 'id="browser-model-dtype"' in index_source
+    assert "/api/byok/models/validate" in route_paths
+    assert "customByokModels" in app_source
+    assert "customBrowserModels" in app_source
+    assert "model_file_name" in transformers_source
     assert 'id="setting-temperature"' in index_source
     assert 'id="setting-max-tokens"' in index_source
     assert 'id="setting-top-p"' in index_source

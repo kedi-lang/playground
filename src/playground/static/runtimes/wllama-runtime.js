@@ -30,18 +30,7 @@ export class WllamaRuntime extends BrowserModelRuntime {
     if (signal?.aborted) {
       abort();
     }
-    const { Wllama } = await import(MODULE_URL);
-    const instance = new Wllama(
-      { default: WASM_URL },
-      {
-        logger: {
-          debug: () => {},
-          log: () => {},
-          warn: () => {},
-          error: () => {},
-        },
-      },
-    );
+    const instance = await createWllama();
     const params = {
       n_ctx: 512,
       n_threads: 1,
@@ -78,6 +67,23 @@ export class WllamaRuntime extends BrowserModelRuntime {
       if (this.loadController === controller) {
         this.loadController = null;
       }
+    }
+  }
+
+  async isCached(config) {
+    if (this.instance && this.modelKey === `model:${config.id}`) {
+      return true;
+    }
+    const inspector = await createWllama();
+    try {
+      const entries = await inspector.cacheManager.list();
+      return entries.some(
+        (entry) =>
+          matchesCachedModel(entry, config) &&
+          entry.size === entry.metadata?.originalSize,
+      );
+    } finally {
+      await inspector.exit?.();
     }
   }
 
@@ -133,6 +139,30 @@ function modelUrl(config) {
   return `https://huggingface.co/${config.repo}/resolve/main/${config.file}`;
 }
 
+async function createWllama() {
+  const { Wllama } = await import(MODULE_URL);
+  return new Wllama(
+    { default: WASM_URL },
+    {
+      logger: {
+        debug: () => {},
+        log: () => {},
+        warn: () => {},
+        error: () => {},
+      },
+    },
+  );
+}
+
+function matchesCachedModel(entry, config) {
+  const originalUrl = entry.metadata?.originalURL ?? "";
+  return (
+    (originalUrl.includes(`/${config.repo}/`) &&
+      originalUrl.includes(`/${config.file}`)) ||
+    entry.name.includes(config.file)
+  );
+}
+
 async function loadCachedModel(instance, config, params) {
   try {
     await instance.loadModelFromUrl(modelUrl(config), params);
@@ -148,12 +178,8 @@ async function loadCachedModel(instance, config, params) {
 async function removeInvalidCachedModel(instance, config) {
   const entries = await instance.cacheManager.list();
   for (const entry of entries) {
-    const originalUrl = entry.metadata?.originalURL ?? "";
-    const matchesModel =
-      originalUrl.includes(`/${config.repo}/`) &&
-      originalUrl.includes(`/${config.file}`);
     if (
-      matchesModel &&
+      matchesCachedModel(entry, config) &&
       entry.size !== entry.metadata?.originalSize
     ) {
       await instance.cacheManager.delete(entry.name);
@@ -162,14 +188,7 @@ async function removeInvalidCachedModel(instance, config) {
 }
 
 async function removeCachedModel(instance, config) {
-  await instance.cacheManager.deleteMany((entry) => {
-    const originalUrl = entry.metadata?.originalURL ?? "";
-    return (
-      (originalUrl.includes(`/${config.repo}/`) &&
-        originalUrl.includes(`/${config.file}`)) ||
-      entry.name.includes(config.file)
-    );
-  });
+  await instance.cacheManager.deleteMany((entry) => matchesCachedModel(entry, config));
 }
 
 function completionText(result) {
