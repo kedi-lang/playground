@@ -1,25 +1,3 @@
----
-title: Kedi Playground
-emoji: 🐈
-colorFrom: gray
-colorTo: blue
-sdk: docker
-app_port: 7860
-fullWidth: true
-header: mini
-models:
-  - prism-ml/Bonsai-1.7B-gguf
-  - onnx-community/Ternary-Bonsai-1.7B-ONNX
-tags:
-  - webgpu
-  - kedi
-  - code
-custom_headers:
-  cross-origin-embedder-policy: require-corp
-  cross-origin-opener-policy: same-origin
-  cross-origin-resource-policy: cross-origin
----
-
 # Kedi Playground
 
 This proof of concept runs the same Kedi source through:
