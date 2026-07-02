@@ -1,4 +1,8 @@
-import { BrowserModelRuntime } from "./runtime.js";
+import {
+  BrowserModelRuntime,
+  DEFAULT_CONTEXT_SOFT_LIMIT_PERCENT,
+  softMaxNewTokens,
+} from "./runtime.js";
 
 const VERSION = "4.2.0";
 const MODULE_URL = `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${VERSION}`;
@@ -12,6 +16,7 @@ export class TransformersRuntime extends BrowserModelRuntime {
     this.TextStreamer = null;
     this.random = null;
     this.loadController = null;
+    this.contextSoftLimitPercent = DEFAULT_CONTEXT_SOFT_LIMIT_PERCENT;
   }
 
   async load(config, onProgress, signal) {
@@ -70,6 +75,9 @@ export class TransformersRuntime extends BrowserModelRuntime {
       this.TextStreamer = TextStreamer;
       this.random = random;
       this.modelKey = modelKey;
+      this.contextSoftLimitPercent = Number(
+        config.contextSoftLimitPercent ?? DEFAULT_CONTEXT_SOFT_LIMIT_PERCENT,
+      );
     } catch (error) {
       await model?.dispose?.();
       if (controller.signal.aborted) {
@@ -111,6 +119,13 @@ export class TransformersRuntime extends BrowserModelRuntime {
       add_generation_prompt: true,
       return_dict: true,
     });
+    const inputTokens = sequenceLength(inputs.input_ids);
+    const maxNewTokens = softMaxNewTokens(
+      inputTokens,
+      Number(settings.max_tokens ?? 48),
+      modelContextSize(this.model),
+      this.contextSoftLimitPercent,
+    );
     let text = "";
     const streamer = new this.TextStreamer(this.tokenizer, {
       skip_prompt: true,
@@ -120,9 +135,9 @@ export class TransformersRuntime extends BrowserModelRuntime {
       },
     });
     const temperature = Number(settings.temperature ?? 0);
-    await this.model.generate({
+    const generated = await this.model.generate({
       ...inputs,
-      max_new_tokens: Number(settings.max_tokens ?? 48),
+      max_new_tokens: maxNewTokens,
       do_sample: temperature > 0,
       temperature: temperature > 0 ? temperature : undefined,
       top_p: Number(settings.top_p ?? 0.9),
@@ -131,7 +146,15 @@ export class TransformersRuntime extends BrowserModelRuntime {
     if (!text.trim()) {
       throw new Error("Transformers.js returned no text");
     }
-    return text.trim();
+    const generatedTokens = sequenceLength(generated?.sequences ?? generated);
+    return {
+      text: text.trim(),
+      usage: {
+        inputTokens,
+        outputTokens: Math.max(0, generatedTokens - inputTokens),
+      },
+      finishReason: "stop",
+    };
   }
 
   async unload() {
@@ -147,6 +170,11 @@ export class TransformersRuntime extends BrowserModelRuntime {
   cancelLoad() {
     this.loadController?.abort();
   }
+}
+
+function modelContextSize(model) {
+  const value = Number(model?.config?.max_position_embeddings);
+  return Number.isFinite(value) && value > 0 ? value : Number.NaN;
 }
 
 function modelFileOptions(config) {
@@ -185,4 +213,13 @@ function renderTransformersProgress(event, onProgress) {
       file: event.file,
     });
   }
+}
+
+function sequenceLength(value) {
+  const dimensions = value?.dims;
+  if (!Array.isArray(dimensions) || !dimensions.length) {
+    return 0;
+  }
+  const length = Number(dimensions.at(-1));
+  return Number.isFinite(length) ? length : 0;
 }

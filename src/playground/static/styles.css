@@ -163,7 +163,8 @@ h1 {
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.08fr) minmax(390px, 0.92fr);
-  min-height: min(720px, calc(100vh - 150px));
+  height: min(720px, calc(100dvh - 150px));
+  min-height: 520px;
   border: 1px solid var(--line);
   background: var(--surface);
 }
@@ -172,7 +173,33 @@ h1 {
   display: grid;
   grid-template-rows: 40px 1fr;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   background: var(--code);
+}
+
+.source-editor {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.monaco-editor .kedi-runtime-error-line {
+  background: rgb(243 139 168 / 9%);
+  box-shadow: inset 2px 0 0 var(--danger);
+}
+
+.monaco-editor .kedi-runtime-error-glyph::before {
+  display: block;
+  width: 8px;
+  height: 8px;
+  margin: 7px auto 0;
+  border: 2px solid var(--code);
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 2px rgb(243 139 168 / 22%);
+  content: "";
 }
 
 .run-pane {
@@ -582,7 +609,7 @@ h1 {
 .result {
   position: relative;
   display: grid;
-  grid-template-rows: 40px minmax(0, 1fr);
+  grid-template-rows: 40px minmax(0, 1fr) auto;
   min-height: 0;
 }
 
@@ -615,6 +642,36 @@ textarea {
 pre {
   color: #d9deea;
   background: #151922;
+}
+
+.stdin-form {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border-top: 1px solid var(--line);
+  background: var(--code);
+}
+
+.stdin-label {
+  color: var(--accent);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.stdin-form input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 6px 9px;
+  color: var(--text);
+  background: #11151d;
+  font-family: "IBM Plex Mono", monospace;
 }
 
 .error {
@@ -719,6 +776,7 @@ dialog::backdrop {
   }
 
   .workspace {
+    height: auto;
     grid-template-columns: 1fr;
     min-height: auto;
   }
@@ -735,6 +793,14 @@ dialog::backdrop {
 }
 
 @media (max-width: 620px) {
+  .stdin-form {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .stdin-form button {
+    grid-row: 2;
+  }
+
   .masthead {
     align-items: start;
   }

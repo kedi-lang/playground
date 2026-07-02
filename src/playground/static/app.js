@@ -1,5 +1,11 @@
 import { AdapterClient, fetchJSON } from "./adapter-client.js";
+import {
+  clearKediExecutionDiagnostic,
+  createKediEditor,
+  setKediExecutionDiagnostic,
+} from "./kedi-editor.js";
 import { MODEL_REGISTRY, modelConfig as builtinModelConfig } from "./model-registry.js";
+import { PyodideRuntime } from "./pyodide-runtime.js";
 import { assertWebGPU, formatBytes } from "./runtimes/runtime.js";
 import { TransformersRuntime } from "./runtimes/transformers-runtime.js";
 import { WllamaRuntime } from "./runtimes/wllama-runtime.js";
@@ -60,6 +66,9 @@ const ui = {
   addBrowserModel: document.querySelector("#add-browser-model"),
   browserModelFeedback: document.querySelector("#browser-model-feedback"),
   browserModelList: document.querySelector("#browser-model-list"),
+  stdinForm: document.querySelector("#stdin-form"),
+  stdinInput: document.querySelector("#stdin-input"),
+  stdinEof: document.querySelector("#stdin-eof"),
 };
 
 let activeRuntime = null;
@@ -68,8 +77,15 @@ let activeRun = null;
 let activeDownload = null;
 let activeModelSource = "cache";
 let cacheCheckId = 0;
+let pendingStdin = null;
+const pythonRuntime = new PyodideRuntime(setStatus, browserIo());
 
 const initialSession = sessionValues();
+const sourceEditor = await createKediEditor(
+  ui.source,
+  initialSession.source || DEFAULT_SOURCE,
+  (source) => saveSession({ source }),
+);
 let customByokModels = Array.isArray(initialSession.customByokModels)
   ? initialSession.customByokModels.filter(isByokModel)
   : [];
@@ -80,7 +96,6 @@ let activeByokModelSource =
   initialSession.byokModelSource === "custom" && customByokModels.length
     ? "custom"
     : "builtin";
-ui.source.value = initialSession.source || DEFAULT_SOURCE;
 renderBrowserModelOptions(initialSession.browserModel);
 renderCustomByokModels(initialSession.byokCustomModel);
 renderCustomBrowserModels();
@@ -93,7 +108,19 @@ bindEvents();
 const initialMode = initialSession.mode === "byok" ? "byok" : "local";
 document.querySelector(`input[name="mode"][value="${initialMode}"]`).checked = true;
 setMode(initialMode);
-setStatus("Ready");
+void pythonRuntime.preload().then(
+  () => {
+    if (!activeRun) {
+      setStatus("Ready");
+    }
+  },
+  (error) => {
+    if (!activeRun) {
+      setStatus("Sandbox unavailable");
+      setProgress(error?.message ?? String(error));
+    }
+  },
+);
 loadByokModels();
 
 function bindEvents() {
@@ -123,6 +150,11 @@ function bindEvents() {
   ui.downloadLocal.addEventListener("click", cacheModel);
   ui.run.addEventListener("click", run);
   ui.cancel.addEventListener("click", cancel);
+  ui.stdinForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitStdin(ui.stdinInput.value);
+  });
+  ui.stdinEof.addEventListener("click", () => submitStdin(null));
   document.querySelector("#open-env").addEventListener("click", openEnv);
   document.querySelector("#close-env").addEventListener("click", closeEnv);
   document.querySelector("#save-env").addEventListener("click", saveEnv);
@@ -157,9 +189,6 @@ function bindEvents() {
   ui.addByokModel.addEventListener("click", addByokModel);
   ui.addBrowserModel.addEventListener("click", addBrowserModel);
   ui.browserModelFile.addEventListener("input", updateBrowserDtypeState);
-  ui.source.addEventListener("input", () => {
-    saveSession({ source: ui.source.value });
-  });
   for (const [, , input] of modelSettingFields()) {
     input.addEventListener("change", saveModelSettings);
   }
@@ -207,8 +236,10 @@ async function run() {
   } catch (error) {
     ui.error.hidden = false;
     ui.error.textContent = error?.message ?? String(error);
+    setKediExecutionDiagnostic(sourceEditor, error?.diagnostic);
     setStatus("Failed");
   } finally {
+    cancelStdin();
     ui.timing.textContent = `${Math.round(performance.now() - started)}ms`;
     setRunning(false);
     activeRun = null;
@@ -221,6 +252,13 @@ async function runLocal() {
   const baseConfig = browserModelConfig(modelId);
   const config = selectedRuntimeConfig(baseConfig);
   const runtime = await runtimeFor(config);
+  const values = envValues();
+  validateLogfireEnvironment(values);
+  const secrets = Object.fromEntries(
+    ["LOGFIRE_ENABLED", "LOGFIRE_TOKEN"]
+      .filter((name) => typeof values[name] === "string" && values[name])
+      .map((name) => [name, values[name]]),
+  );
   const runId = crypto.randomUUID();
   const controller = new AbortController();
   activeRun = { runId, controller, bridgeStarted: false };
@@ -232,7 +270,7 @@ async function runLocal() {
   setProgress("Model loaded");
   setStatus("Running Kedi");
 
-  const client = new AdapterClient(runtime, setStatus);
+  const client = new AdapterClient(runtime, setStatus, browserIo(), pythonRuntime);
   const bridge = client.serve(runId, controller.signal);
   activeRun.bridgeStarted = true;
   try {
@@ -240,10 +278,11 @@ async function runLocal() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        source: ui.source.value,
+        source: sourceEditor.getValue(),
         modelId,
         modelConfig: MODEL_REGISTRY[modelId] ? null : baseConfig,
         runId,
+        secrets,
         settings: modelSettings(),
       }),
     });
@@ -264,9 +303,7 @@ async function runByok() {
     throw new Error("Enter a BYOK model");
   }
   const values = envValues();
-  if (values.LOGFIRE_ENABLED === "true" && !values.LOGFIRE_TOKEN) {
-    throw new Error("LOGFIRE_TOKEN is required when Logfire is enabled");
-  }
+  validateLogfireEnvironment(values);
   const secrets = Object.fromEntries(
     Object.entries(values).filter(
       ([name, value]) => name !== "HF_TOKEN" && typeof value === "string" && value,
@@ -276,14 +313,14 @@ async function runByok() {
   const runId = crypto.randomUUID();
   const controller = new AbortController();
   activeRun = { runId, controller, bridgeStarted: true };
-  const client = new AdapterClient(null, setStatus);
+  const client = new AdapterClient(null, setStatus, browserIo(), pythonRuntime);
   const bridge = client.serve(runId, controller.signal);
   try {
     const result = await fetchJSON("/api/run/byok", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        source: ui.source.value,
+        source: sourceEditor.getValue(),
         model,
         runId,
         secrets,
@@ -296,6 +333,12 @@ async function runByok() {
     return result;
   } finally {
     controller.abort();
+  }
+}
+
+function validateLogfireEnvironment(values) {
+  if (values.LOGFIRE_ENABLED === "true" && !values.LOGFIRE_TOKEN) {
+    throw new Error("LOGFIRE_TOKEN is required when Logfire is enabled");
   }
 }
 
@@ -313,6 +356,7 @@ async function cancel() {
   if (!activeRun) {
     return;
   }
+  cancelStdin();
   activeRun.controller.abort();
   activeRuntime?.cancelLoad?.();
   if (activeRun.bridgeStarted) {
@@ -607,10 +651,65 @@ function setRunning(running) {
 }
 
 function clearResult() {
+  clearKediExecutionDiagnostic(sourceEditor);
   ui.output.textContent = "";
   ui.error.textContent = "";
   ui.error.hidden = true;
   ui.timing.textContent = "";
+  closeStdin();
+}
+
+function browserIo() {
+  return {
+    onStdout: appendProgramOutput,
+    onStderr: appendProgramOutput,
+    onStdin: requestStdin,
+  };
+}
+
+function appendProgramOutput(value) {
+  ui.output.textContent += value;
+  ui.output.scrollTop = ui.output.scrollHeight;
+}
+
+function requestStdin() {
+  if (pendingStdin) {
+    return Promise.reject(new Error("A stdin request is already active"));
+  }
+  setStatus("Waiting for input");
+  ui.stdinForm.hidden = false;
+  ui.stdinInput.value = "";
+  ui.stdinInput.focus();
+  return new Promise((resolve, reject) => {
+    pendingStdin = { resolve, reject };
+  });
+}
+
+function submitStdin(value) {
+  if (!pendingStdin) {
+    return;
+  }
+  const request = pendingStdin;
+  pendingStdin = null;
+  closeStdin();
+  setStatus("Running Python sandbox");
+  request.resolve(value);
+}
+
+function cancelStdin() {
+  if (!pendingStdin) {
+    closeStdin();
+    return;
+  }
+  const request = pendingStdin;
+  pendingStdin = null;
+  closeStdin();
+  request.reject(new Error("Standard input was cancelled"));
+}
+
+function closeStdin() {
+  ui.stdinForm.hidden = true;
+  ui.stdinInput.value = "";
 }
 
 function setStatus(message) {

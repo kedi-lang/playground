@@ -6,17 +6,17 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping, Sequence
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PLAYGROUND_ROOT = PACKAGE_ROOT.parents[1]
 REPOSITORY_ROOT = PLAYGROUND_ROOT.parent
-WORKER = Path(__file__).with_name("byok_worker.py")
+WORKER = Path(__file__).with_name("worker_process.py")
 
 ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
-def run_byok(
+def run_provider(
     *,
     source: str,
     model: str,
@@ -27,6 +27,59 @@ def run_byok(
     bridge_token: str,
     timeout: float = 300,
 ) -> dict[str, Any]:
+    return _run_worker(
+        mode="provider",
+        source=source,
+        model=model,
+        supported_models=(),
+        secrets=secrets,
+        settings=settings,
+        run_id=run_id,
+        bridge_url=bridge_url,
+        bridge_token=bridge_token,
+        timeout=timeout,
+    )
+
+
+def run_webgpu(
+    *,
+    source: str,
+    model: str,
+    supported_models: Sequence[str],
+    secrets: Mapping[str, object],
+    settings: Mapping[str, object],
+    run_id: str,
+    bridge_url: str,
+    bridge_token: str,
+    timeout: float = 300,
+) -> dict[str, Any]:
+    return _run_worker(
+        mode="webgpu",
+        source=source,
+        model=model,
+        supported_models=supported_models,
+        secrets=secrets,
+        settings=settings,
+        run_id=run_id,
+        bridge_url=bridge_url,
+        bridge_token=bridge_token,
+        timeout=timeout,
+    )
+
+
+def _run_worker(
+    *,
+    mode: Literal["provider", "webgpu"],
+    source: str,
+    model: str,
+    supported_models: Sequence[str],
+    secrets: Mapping[str, object],
+    settings: Mapping[str, object],
+    run_id: str,
+    bridge_url: str,
+    bridge_token: str,
+    timeout: float,
+) -> dict[str, Any]:
     if any(ENV_NAME_PATTERN.fullmatch(name) is None for name in secrets):
         raise ValueError("Environment names must be uppercase identifiers")
     if any(not isinstance(value, str) for value in secrets.values()):
@@ -35,8 +88,10 @@ def run_byok(
     env = _worker_environment(secrets=secrets)
     payload = json.dumps(
         {
+            "mode": mode,
             "source": source,
             "model": model,
+            "supportedModels": list(supported_models),
             "settings": dict(settings),
             "runId": run_id,
             "bridgeUrl": bridge_url,
@@ -55,14 +110,16 @@ def run_byok(
     )
     output = completed.stdout.strip()
     if not output:
-        message = completed.stderr.strip() or "BYOK worker returned no output"
+        message = completed.stderr.strip() or "Playground worker returned no output"
         raise RuntimeError(_redact(message, secrets))
     try:
         result = json.loads(output)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(_redact(f"Invalid BYOK worker response: {output}", secrets)) from exc
+        raise RuntimeError(
+            _redact(f"Invalid playground worker response: {output}", secrets)
+        ) from exc
     if not isinstance(result, dict):
-        raise TypeError("BYOK worker response must be an object")
+        raise TypeError("Playground worker response must be an object")
     return result
 
 
@@ -108,5 +165,6 @@ def _redact(message: str, secrets: Mapping[str, object]) -> str:
 
 __all__ = [
     "ENV_NAME_PATTERN",
-    "run_byok",
+    "run_provider",
+    "run_webgpu",
 ]

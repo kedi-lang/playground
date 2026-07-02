@@ -25,7 +25,7 @@
       <section class="workspace">
         <div class="editor-pane">
           <div class="pane-heading">Program</div>
-          <textarea id="source" spellcheck="false" aria-label="Kedi source"></textarea>
+          <div id="source" class="source-editor" aria-label="Kedi source"></div>
         </div>
 
         <aside class="run-pane">
@@ -272,6 +272,18 @@
           <div class="result">
             <div class="pane-heading">Output</div>
             <pre id="output">Waiting for run.</pre>
+            <form id="stdin-form" class="stdin-form" hidden>
+              <span class="stdin-label">stdin</span>
+              <input
+                id="stdin-input"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                aria-label="Standard input"
+              />
+              <button id="stdin-send" class="primary" type="submit">Send</button>
+              <button id="stdin-eof" class="secondary" type="button">EOF</button>
+            </form>
             <div id="error" class="error" hidden></div>
           </div>
         </aside>
@@ -326,6 +338,7 @@
         </div>
       </dialog>
     </main>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs/loader.js"></script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>
