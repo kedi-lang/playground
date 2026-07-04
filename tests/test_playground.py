@@ -606,6 +606,29 @@ def test_local_run_returns_http_error_for_worker_failure(
     }
 
 
+def test_internal_bridge_uses_container_loopback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SimpleNamespace(base_url="https://kedi-lang-playground.hf.space/")
+
+    monkeypatch.setenv("PORT", "7860")
+    with server._internal_bridge("container-run", request) as (url, token):
+        assert url == "http://127.0.0.1:7860/api/internal/bridge/request"
+        assert token
+
+    monkeypatch.setenv(
+        "PLAYGROUND_INTERNAL_BRIDGE_URL",
+        "http://playground-internal/bridge",
+    )
+    with server._internal_bridge("explicit-run", request) as (url, _):
+        assert url == "http://playground-internal/bridge"
+
+    monkeypatch.delenv("PLAYGROUND_INTERNAL_BRIDGE_URL")
+    monkeypatch.delenv("PORT")
+    with server._internal_bridge("local-run", request) as (url, _):
+        assert url == "https://kedi-lang-playground.hf.space/api/internal/bridge/request"
+
+
 def test_worker_process_configures_logfire_only_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

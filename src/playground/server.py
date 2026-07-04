@@ -335,14 +335,21 @@ def _internal_bridge(run_id: str, request: Request) -> Iterator[tuple[str, str]]
     with _INTERNAL_BRIDGE_LOCK:
         _INTERNAL_BRIDGE_TOKENS[run_id] = token
     try:
-        url = os.environ.get(
-            "PLAYGROUND_INTERNAL_BRIDGE_URL",
-            f"{str(request.base_url).rstrip('/')}/api/internal/bridge/request",
-        )
+        url = _internal_bridge_url(request)
         yield url, token
     finally:
         with _INTERNAL_BRIDGE_LOCK:
             _INTERNAL_BRIDGE_TOKENS.pop(run_id, None)
+
+
+def _internal_bridge_url(request: Request) -> str:
+    explicit_url = os.environ.get("PLAYGROUND_INTERNAL_BRIDGE_URL")
+    if explicit_url:
+        return explicit_url
+    port = os.environ.get("PORT")
+    if port:
+        return f"http://127.0.0.1:{port}/api/internal/bridge/request"
+    return f"{str(request.base_url).rstrip('/')}/api/internal/bridge/request"
 
 
 def _error_response(exc: Exception) -> JSONResponse:
