@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kedi Playground</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <div class="brand">
+          <h1>Kedi Playground</h1>
+          <div class="status-line" aria-live="polite">
+            <span class="status-dot"></span>
+            <span id="status">Starting</span>
+          </div>
+        </div>
+        <div class="masthead-tools">
+          <span class="runtime-note">Browser inference, Kedi runtime</span>
+          <button id="open-env" class="secondary" type="button">Environment</button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <div class="editor-pane">
+          <div class="pane-heading editor-heading">
+            <span>Program</span>
+            <div class="example-tabs" role="tablist" aria-label="Kedi examples">
+              <button
+                class="example-tab"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                data-example="capital"
+              >
+                Capital
+              </button>
+              <button
+                class="example-tab"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                data-example="contact"
+              >
+                Contact extraction
+              </button>
+              <button
+                class="example-tab"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                data-example="delivery"
+              >
+                Delivery tool
+              </button>
+            </div>
+          </div>
+          <div id="source" class="source-editor" aria-label="Kedi source"></div>
+        </div>
+
+        <aside class="run-pane">
+          <div class="run-toolbar">
+            <div class="actions">
+              <button id="run" class="primary" type="button">Run</button>
+              <button id="cancel" class="secondary" type="button" disabled>Cancel</button>
+            </div>
+            <span id="timing" class="metric">idle</span>
+          </div>
+
+          <section class="controls" aria-label="Run controls">
+            <div class="control-tabs" role="tablist" aria-label="Playground settings">
+              <button
+                id="run-setup-tab"
+                class="control-tab active"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                aria-controls="run-settings-panel"
+                data-control-tab="run"
+              >
+                Run setup
+              </button>
+              <button
+                id="model-settings-tab"
+                class="control-tab"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="model-settings-panel"
+                data-control-tab="settings"
+              >
+                Model settings
+              </button>
+              <button
+                id="models-tab"
+                class="control-tab"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="models-panel"
+                data-control-tab="models"
+              >
+                Models
+              </button>
+            </div>
+
+            <div
+              id="run-settings-panel"
+              class="control-panel run-controls-panel"
+              role="tabpanel"
+              aria-labelledby="run-setup-tab"
+            >
+              <div class="mode-group">
+                <span class="group-label">Execution</span>
+                <div class="segmented">
+                  <label>
+                    <input type="radio" name="mode" value="local" checked />
+                    <span>WebGPU</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="mode" value="byok" />
+                    <span>BYOK</span>
+                  </label>
+                </div>
+              </div>
+
+              <div id="local-controls">
+                <label class="field">
+                  <span>Model</span>
+                  <select id="model"></select>
+                </label>
+              </div>
+
+              <div id="model-source-controls" class="source-controls">
+                <button
+                  id="download-local"
+                  class="model-download"
+                  type="button"
+                  data-state="checking"
+                  disabled
+                >
+                  Checking
+                </button>
+                <div id="file-picker" class="file-picker">
+                  <input
+                    id="model-file"
+                    class="file-input"
+                    type="file"
+                    accept=".gguf"
+                    aria-label="GGUF file"
+                  />
+                  <label for="model-file" class="file-button">Choose GGUF</label>
+                  <span id="model-file-name" class="file-name" aria-live="polite"></span>
+                </div>
+              </div>
+
+              <div id="byok-controls" hidden>
+                <label class="field">
+                  <span>Builtin models</span>
+                  <select id="byok-model"></select>
+                </label>
+                <label id="byok-custom-model-field" class="field" hidden>
+                  <span>Custom BYOK models</span>
+                  <select id="byok-custom-model"></select>
+                </label>
+                <button id="open-models-tab" class="inline-note" type="button">
+                  Can't find your model? Add a Pydantic-compatible model.
+                </button>
+              </div>
+            </div>
+
+            <div
+              id="model-settings-panel"
+              class="control-panel model-settings-panel"
+              role="tabpanel"
+              aria-labelledby="model-settings-tab"
+              hidden
+            >
+              <div class="settings-grid">
+                <label class="field">
+                  <span>Temperature</span>
+                  <input
+                    id="setting-temperature"
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    inputmode="decimal"
+                  />
+                </label>
+                <label class="field">
+                  <span>Max tokens</span>
+                  <input
+                    id="setting-max-tokens"
+                    type="number"
+                    min="1"
+                    max="512"
+                    step="1"
+                    inputmode="numeric"
+                  />
+                </label>
+                <label class="field">
+                  <span>Top P</span>
+                  <input
+                    id="setting-top-p"
+                    type="number"
+                    min="0.05"
+                    max="1"
+                    step="0.05"
+                    inputmode="decimal"
+                  />
+                </label>
+                <label class="field">
+                  <span>Seed</span>
+                  <input
+                    id="setting-seed"
+                    type="number"
+                    min="0"
+                    max="4294967295"
+                    step="1"
+                    inputmode="numeric"
+                    placeholder="Random"
+                  />
+                </label>
+              </div>
+              <button id="reset-model-settings" class="secondary settings-reset" type="button">
+                Reset
+              </button>
+            </div>
+
+            <div
+              id="models-panel"
+              class="control-panel models-panel"
+              role="tabpanel"
+              aria-labelledby="models-tab"
+              hidden
+            >
+              <section class="model-manager">
+                <div class="model-manager-heading">
+                  <h2>BYOK models</h2>
+                  <span>Pydantic AI</span>
+                </div>
+                <div class="model-form byok-model-form">
+                  <label class="field">
+                    <span>Display name</span>
+                    <input id="byok-model-label" placeholder="Fast" />
+                  </label>
+                  <label class="field model-id-field">
+                    <span>Model ID</span>
+                    <input
+                      id="byok-model-id"
+                      placeholder="openrouter:google/gemini-3-flash-preview"
+                    />
+                  </label>
+                  <button id="add-byok-model" class="secondary" type="button">Add</button>
+                </div>
+                <div id="byok-model-feedback" class="model-feedback" aria-live="polite"></div>
+                <div id="byok-model-list" class="model-list"></div>
+              </section>
+
+              <section class="model-manager">
+                <div class="model-manager-heading">
+                  <h2>WebGPU models</h2>
+                  <span>GGUF / ONNX</span>
+                </div>
+                <div class="model-form browser-model-form">
+                  <label class="field">
+                    <span>Display name</span>
+                    <input id="browser-model-label" placeholder="Small local" />
+                  </label>
+                  <label class="field">
+                    <span>Hugging Face repo</span>
+                    <input id="browser-model-repo" placeholder="organization/model" />
+                  </label>
+                  <label class="field model-file-field">
+                    <span>Model file</span>
+                    <input id="browser-model-file" placeholder="onnx/model_q4.onnx" />
+                  </label>
+                  <label class="field">
+                    <span>Dtype</span>
+                    <select id="browser-model-dtype">
+                      <option value="q2">q2</option>
+                      <option value="q4">q4</option>
+                      <option value="q4f16">q4f16</option>
+                      <option value="q8">q8</option>
+                      <option value="fp16">fp16</option>
+                      <option value="fp32">fp32</option>
+                    </select>
+                  </label>
+                  <button id="add-browser-model" class="secondary" type="button">Add</button>
+                </div>
+                <div id="browser-model-feedback" class="model-feedback" aria-live="polite"></div>
+                <div id="browser-model-list" class="model-list"></div>
+              </section>
+            </div>
+          </section>
+
+          <div class="progress-row" aria-live="polite">
+            <span id="progress" hidden></span>
+          </div>
+
+          <div class="result">
+            <div class="pane-heading">Output</div>
+            <pre id="output">Waiting for run.</pre>
+            <form id="stdin-form" class="stdin-form" hidden>
+              <span class="stdin-label">stdin</span>
+              <input
+                id="stdin-input"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                aria-label="Standard input"
+              />
+              <button id="stdin-send" class="primary" type="submit">Send</button>
+              <button id="stdin-eof" class="secondary" type="button">EOF</button>
+            </form>
+            <div id="error" class="error" hidden></div>
+          </div>
+        </aside>
+      </section>
+
+      <dialog id="env-dialog">
+        <div class="dialog-header">
+          <h2>Environment</h2>
+          <button id="close-env" type="button" aria-label="Close">Close</button>
+        </div>
+        <div class="dialog-body">
+          <label class="field">
+            <span>HF_TOKEN</span>
+            <input type="password" autocomplete="off" data-env="HF_TOKEN" />
+          </label>
+          <label class="field">
+            <span>OPENROUTER_API_KEY</span>
+            <input type="password" autocomplete="off" data-env="OPENROUTER_API_KEY" />
+          </label>
+          <label class="field">
+            <span>OPENAI_API_KEY</span>
+            <input type="password" autocomplete="off" data-env="OPENAI_API_KEY" />
+          </label>
+          <label class="field">
+            <span>ANTHROPIC_API_KEY</span>
+            <input type="password" autocomplete="off" data-env="ANTHROPIC_API_KEY" />
+          </label>
+          <label class="field">
+            <span>GROQ_API_KEY</span>
+            <input type="password" autocomplete="off" data-env="GROQ_API_KEY" />
+          </label>
+          <label class="field">
+            <span>LOGFIRE_TOKEN</span>
+            <input type="password" autocomplete="off" data-env="LOGFIRE_TOKEN" />
+          </label>
+          <label class="toggle-field">
+            <input type="checkbox" data-env="LOGFIRE_ENABLED" />
+            <span>Enable Logfire</span>
+          </label>
+          <div id="env-feedback" class="model-feedback" role="alert" hidden></div>
+          <div class="custom-env">
+            <div class="custom-env-heading">
+              <span>Custom variables</span>
+              <button id="add-env" type="button">Add variable</button>
+            </div>
+            <div id="custom-env-list"></div>
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button id="clear-env" type="button">Clear</button>
+          <button id="save-env" class="primary" type="button">Save</button>
+        </div>
+      </dialog>
+    </main>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.55.1/min/vs/loader.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
