@@ -121,6 +121,26 @@ jobs:
           )
           PYTHON_EOF
 
+      - name: Prepare Hugging Face Space metadata
+        run: |
+          python << 'PYTHON_EOF'
+          from pathlib import Path
+
+          readme_path = Path("README.md")
+          body = readme_path.read_text(encoding="utf-8")
+          metadata = """---
+          title: Kedi Playground
+          emoji: 🐈
+          colorFrom: blue
+          colorTo: cyan
+          sdk: docker
+          app_port: 7860
+          pinned: false
+          ---
+          """
+          readme_path.write_text(f"{metadata}\n{body}", encoding="utf-8")
+          PYTHON_EOF
+
       - name: Sync repository to Hugging Face
         uses: huggingface/hub-sync@v0.1.0
         with:

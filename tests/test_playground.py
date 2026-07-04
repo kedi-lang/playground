@@ -101,6 +101,9 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert "`HF_TOKEN`" in readme
     assert "`HF_SPACE_ID`" in readme
     assert "`KEDI_GITHUB_TOKEN`" in readme
+    assert "Prepare Hugging Face Space metadata" in workflow
+    assert "title: Kedi Playground" in workflow
+    assert "app_port: 7860" in workflow
     assert "huggingface/hub-sync@v0.1.0" in workflow
     assert workflow.count("uses: actions/checkout@v4") == 2
     assert "needs: verify" in workflow
