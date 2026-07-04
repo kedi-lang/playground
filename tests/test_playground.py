@@ -102,6 +102,7 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert "`HF_SPACE_ID`" in readme
     assert "`KEDI_GITHUB_TOKEN`" in readme
     assert "huggingface/hub-sync@v0.1.0" in workflow
+    assert workflow.count("uses: actions/checkout@v4") == 2
     assert "needs: verify" in workflow
     assert "space_sdk: docker" in workflow
     assert "api.add_space_secret(" in workflow
