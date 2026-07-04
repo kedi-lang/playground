@@ -19,8 +19,8 @@ Open <http://127.0.0.1:8787>.
 
 ## Docker
 
-The default image currently installs the private `kedi_playground` branch
-because the required browser adapter is newer than the latest PyPI release:
+The default development image installs the `stable` branch from the private
+Kedi repository:
 
 ```bash
 KEDI_GITHUB_TOKEN="$(gh auth token)" \
@@ -35,12 +35,11 @@ Select another development revision explicitly:
 ```bash
 docker build \
   --build-arg KEDI_INSTALL_MODE=dev \
-  --build-arg KEDI_REVISION=kedi_playground \
+  --build-arg KEDI_REVISION=stable \
   -t kedi-playground:dev .
 ```
 
-After a compatible Kedi release reaches PyPI, production mode installs the
-latest published `kedi[playground]`:
+Production mode installs the latest published `kedi[playground]` from PyPI:
 
 ```bash
 docker build --build-arg KEDI_INSTALL_MODE=prod -t kedi-playground:prod .

@@ -34,7 +34,7 @@ include = [
 packages = ["src/playground"]
 
 [tool.uv.sources]
-kedi = { git = "https://github.com/kedi-lang/kedi.git", branch = "kedi_playground" }
+kedi = { git = "https://github.com/kedi-lang/kedi.git", branch = "stable" }
 
 [tool.ruff]
 line-length = 99

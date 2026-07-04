@@ -1473,7 +1473,7 @@ wheels = [
 [[package]]
 name = "kedi"
 version = "0.4.0"
-source = { git = "https://github.com/kedi-lang/kedi.git?branch=kedi_playground#d87b64249b0940b2c0ce5f93fd324d8591e14c57" }
+source = { git = "https://github.com/kedi-lang/kedi.git?branch=stable#95f95bc4df8aa4de9d43e5be721bf0bc6f73c9f8" }
 dependencies = [
     { name = "click" },
     { name = "docstring-parser" },
@@ -1519,7 +1519,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "kedi", extras = ["playground"], git = "https://github.com/kedi-lang/kedi.git?branch=kedi_playground" }]
+requires-dist = [{ name = "kedi", extras = ["playground"], git = "https://github.com/kedi-lang/kedi.git?branch=stable" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3645,7 +3645,7 @@ wheels = [
 [[package]]
 name = "tree-sitter-kedi"
 version = "0.4.0"
-source = { git = "https://github.com/kedi-lang/kedi.git?subdirectory=tree-sitter-kedi&branch=kedi_playground#d87b64249b0940b2c0ce5f93fd324d8591e14c57" }
+source = { git = "https://github.com/kedi-lang/kedi.git?subdirectory=tree-sitter-kedi&branch=stable#95f95bc4df8aa4de9d43e5be721bf0bc6f73c9f8" }
 dependencies = [
     { name = "tree-sitter" },
 ]

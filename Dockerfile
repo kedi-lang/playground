@@ -10,7 +10,7 @@ RUN apt-get update \
 
 ARG KEDI_INSTALL_MODE=dev
 ARG KEDI_REPOSITORY=https://github.com/kedi-lang/kedi.git
-ARG KEDI_REVISION=kedi_playground
+ARG KEDI_REVISION=stable
 
 RUN --mount=type=secret,id=KEDI_GITHUB_TOKEN,required=false \
     set -eu; \

@@ -84,7 +84,7 @@ def test_health_endpoint_and_space_container_configuration() -> None:
 
     assert response == {"status": "ok"}
     assert "ARG KEDI_INSTALL_MODE=dev" in dockerfile
-    assert "ARG KEDI_REVISION=kedi_playground" in dockerfile
+    assert "ARG KEDI_REVISION=stable" in dockerfile
     assert "build-essential" in dockerfile
     assert "--mount=type=secret,id=KEDI_GITHUB_TOKEN,required=false" in dockerfile
     assert '"kedi[playground]"' in dockerfile

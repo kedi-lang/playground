@@ -42,13 +42,18 @@ jobs:
             "https://github.com/"
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --frozen --group dev
+
+      - name: Verify Kedi dependency
+        run: |
+          uv run --no-sync python -c \
+            "from kedi.agent_adapter import WebGPUAdapter; from kedi.errors import KediExecutionError; from kedi.executors import PyodideExecutor"
 
       - name: Check code
         run: |
-          uv run ruff check .
-          uv run ruff format --check .
-          uv run pytest -q
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
+          uv run --no-sync pytest -q
 
       - name: Build Python package
         run: uv build
