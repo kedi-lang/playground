@@ -222,6 +222,51 @@ h1 {
   text-transform: uppercase;
 }
 
+.editor-heading {
+  justify-content: space-between;
+  gap: 18px;
+  padding-right: 8px;
+}
+
+.example-tabs {
+  display: flex;
+  align-self: stretch;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.example-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.example-tab {
+  min-height: 39px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 0 9px;
+  color: var(--faint);
+  background: transparent;
+  font-size: 0.67rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.example-tab:hover:not(:disabled) {
+  border-bottom-color: var(--line-strong);
+  background: transparent;
+  color: var(--text);
+}
+
+.example-tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
 .run-toolbar {
   display: flex;
   align-items: center;

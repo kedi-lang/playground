@@ -113,9 +113,8 @@ function browserMessages(request) {
   const outputContract =
     request.outputPrompt || formatOutputContract(request.outputSchema);
   const toolCatalog = formatToolCatalog(request.tools);
-  const base = [
-    request.instructions || "Complete the Kedi template accurately.",
-  ];
+  const messages = canonicalTemplateMessages(request.messages, outputKeys);
+  const base = [request.instructions];
   let contract;
   if (request.tools.length) {
     const toolResults = request.messages
@@ -158,10 +157,11 @@ function browserMessages(request) {
       "The final data must match this XML output contract:",
       outputContract,
       "The XML contract describes the answer shape only. Never copy its tags or field metadata into final data.",
+      'Type labels and placeholders such as "string", "integer", "value", and "example" are never valid field values.',
+      "Generate concrete semantic values that complete the template.",
     ];
   } else if (!objectOutput) {
     contract = [
-      "Replace the bracketed output placeholder in the user prompt.",
       "Return only that placeholder's value with no JSON, label, markdown, or explanation.",
     ];
   } else {
@@ -171,12 +171,41 @@ function browserMessages(request) {
       "Match this XML output contract:",
       outputContract,
       "Return values, not the XML field metadata.",
+      'Type labels and placeholders such as "string", "integer", "value", and "example" are never valid field values.',
+      "Generate concrete semantic values that complete the template.",
     ];
   }
   const system = [...base, ...contract, request.effort ? `Reasoning effort: ${request.effort}.` : ""]
     .filter(Boolean)
     .join("\n");
-  return [{ role: "system", content: system }, ...request.messages];
+  return [{ role: "system", content: system }, ...messages];
+}
+
+function canonicalTemplateMessages(messages, outputKeys) {
+  if (!outputKeys.length) {
+    return messages;
+  }
+  const userIndex = messages.findIndex((message) => message.role === "user");
+  if (userIndex < 0) {
+    return messages;
+  }
+  const content = messages[userIndex].content;
+  if (
+    typeof content !== "string" ||
+    content.includes("Fields to be substituted into the template string for final construction:")
+  ) {
+    return messages;
+  }
+  const instruction =
+    "The template string must maintain grammatical and semantic integrity once the output fields are substituted into" +
+    " their corresponding locations in the template after the final construction.\n";
+  const fields =
+    "Fields to be substituted into the template string for final construction: " +
+    `(${outputKeys.join(", ")}).`;
+  const normalized = `${instruction}${fields}\n\nThe template string:\n${content}`;
+  return messages.map((message, index) =>
+    index === userIndex ? { ...message, content: normalized } : message,
+  );
 }
 
 function parseToolResult(content) {
@@ -331,10 +360,13 @@ function formatToolCatalog(tools) {
 
 function formatXmlFields(entries) {
   return entries
-    .map(
-      ([name, schema]) =>
-        `<${name}>${escapeXml(schemaType(schema))}</${name}>`,
-    )
+    .map(([name, schema]) => {
+      const description =
+        typeof schema?.description === "string" && schema.description
+          ? ` description="${escapeXml(schema.description)}"`
+          : "";
+      return `<field name="${escapeXml(name)}" type="${escapeXml(schemaType(schema))}"${description} />`;
+    })
     .join("\n");
 }
 
@@ -436,7 +468,6 @@ function matchesSchemaType(value, schema) {
       return true;
   }
 }
-
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

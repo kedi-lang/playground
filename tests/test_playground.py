@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
-
 from kedi.errors import KediExecutionError, KediPythonTrace, KediTraceFrame
+from kedi.lang import parse_program
 from kedi.lang.ast import Span
+
 from playground import server, worker, worker_process
 from playground.bridge import BridgeCancelled, BridgeManager, BridgeRun
 from playground.execution import (
@@ -75,29 +78,62 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     playground_root = Path(server.__file__).resolve().parents[2]
     dockerfile = (playground_root / "Dockerfile").read_text(encoding="utf-8")
     readme = (playground_root / "README.md").read_text(encoding="utf-8")
+    workflow = (playground_root / ".github" / "workflows" / "space.yml").read_text(
+        encoding="utf-8"
+    )
 
     assert response == {"status": "ok"}
     assert "ARG KEDI_INSTALL_MODE=dev" in dockerfile
     assert "ARG KEDI_REVISION=kedi_playground" in dockerfile
     assert "build-essential" in dockerfile
-    assert "--mount=type=secret,id=GITHUB_TOKEN" in dockerfile
-    assert 'kedi_package="kedi[playground]"' in dockerfile
-    assert 'KEDI_INSTALL_MODE" = "dev"' in dockerfile
+    assert "--mount=type=secret,id=KEDI_GITHUB_TOKEN,required=false" in dockerfile
+    assert '"kedi[playground]"' in dockerfile
+    assert '"kedi[playground] @ git+${KEDI_REPOSITORY}@${KEDI_REVISION}"' in dockerfile
     assert "KEDI_INSTALL_MODE must be prod or dev" in dockerfile
     assert "from kedi.agent_adapter import WebGPUAdapter" in dockerfile
     assert "from kedi.executors import PyodideExecutor" in dockerfile
     assert "USER user" in dockerfile
     assert "PORT=7860" in dockerfile
     assert "PYTHONPATH=/home/user/app/src" in dockerfile
-    assert "COPY --chown=user:user src/playground ./src/playground" in dockerfile
+    assert "COPY --chown=user:user src ./src" in dockerfile
     assert "models" in (playground_root / ".dockerignore").read_text(encoding="utf-8")
-    assert "sdk: docker" in readme
-    assert "app_port: 7860" in readme
-    assert "cross-origin-embedder-policy: require-corp" in readme
-    assert "cross-origin-opener-policy: same-origin" in readme
-    assert "cross-origin-resource-policy: cross-origin" in readme
-    assert "`KEDI_INSTALL_MODE` Space build variable" in readme
-    assert "`GITHUB_TOKEN` Space secret" in readme
+    assert not readme.startswith("---")
+    assert "`HF_TOKEN`" in readme
+    assert "`HF_SPACE_ID`" in readme
+    assert "`KEDI_GITHUB_TOKEN`" in readme
+    assert "huggingface/hub-sync@v0.1.0" in workflow
+    assert "needs: verify" in workflow
+    assert "space_sdk: docker" in workflow
+    assert "api.add_space_secret(" in workflow
+
+
+def test_tutorial_examples_are_parseable_and_tool_usage_stays_focused() -> None:
+    app_source = (Path(server.__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
+    examples_match = re.search(
+        r"const EXAMPLES = Object\.freeze\(\{(?P<body>.*?)\}\);",
+        app_source,
+        re.DOTALL,
+    )
+
+    assert examples_match is not None
+    examples = dict(
+        re.findall(
+            r"^\s*(\w+): `(.*?)`,?$",
+            examples_match.group("body"),
+            re.DOTALL | re.MULTILINE,
+        )
+    )
+    assert set(examples) == {"capital", "contact", "delivery"}
+    assert sum("> use:" in source for source in examples.values()) == 1
+    assert all("[" in source and "]" in source for source in examples.values())
+    assert "Contact extraction" in (
+        Path(server.__file__).parent / "static" / "index.html"
+    ).read_text(encoding="utf-8")
+    assert "Delivery tool" in (Path(server.__file__).parent / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    for source in examples.values():
+        parse_program(source, source_path="<tutorial>")
 
 
 def test_model_settings_payload_accepts_only_shared_adapter_settings() -> None:
@@ -855,6 +891,10 @@ def test_model_downloads_are_browser_owned() -> None:
     assert "JSON.stringify(request.outputSchema)" not in adapter_source
     assert "formatOutputContract(request.outputSchema)" in adapter_source
     assert "formatToolCatalog(request.tools)" in adapter_source
+    assert '<field name="${escapeXml(name)}" type="${escapeXml(schemaType(schema))}"' in (
+        adapter_source
+    )
+    assert "`<${name}>${escapeXml(schemaType(schema))}</${name}>`" not in adapter_source
     assert "validateToolArguments(tool, toolCall.arguments)" in adapter_source
     assert "Return a corrected call_tool action using concrete values only." in adapter_source
     assert "loadModelFromUrl(modelUrl(config), params)" in wllama_source
@@ -979,6 +1019,9 @@ def test_model_downloads_are_browser_owned() -> None:
     assert 'id="setting-top-p"' in index_source
     assert 'id="setting-seed"' in index_source
     assert app_source.count("settings: modelSettings()") == 2
+    assert 'class="example-tabs"' in index_source
+    assert index_source.count('data-example="') == 3
+    assert "sourceEditor.setValue(source)" in app_source
 
 
 def test_wllama_uses_the_fast_demo_generation_path() -> None:
@@ -1012,8 +1055,16 @@ def test_wllama_uses_the_fast_demo_generation_path() -> None:
     assert 'kind: "retry"' in adapter_source
     assert "You said ${mentionedTool.name} should be used but did not call it." in adapter_source
     assert "responseFormat:" in adapter_source
-    assert "Replace the bracketed output placeholder" in adapter_source
+    assert "canonicalTemplateMessages(request.messages, outputKeys)" in adapter_source
+    assert (
+        "Fields to be substituted into the template string for final construction:"
+        in adapter_source
+    )
+    assert "Complete the Kedi template accurately." not in adapter_source
+    assert "Replace the bracketed output placeholder" not in adapter_source
     assert "Return exactly these keys" in adapter_source
+    assert '"string", "integer", "value", and "example"' in adapter_source
+    assert "Generate concrete semantic values that complete the template." in adapter_source
 
 
 def test_byok_rejects_invalid_worker_json(monkeypatch: pytest.MonkeyPatch) -> None:

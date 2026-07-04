@@ -5,10 +5,10 @@ import os
 import secrets
 import threading
 from argparse import ArgumentParser
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Literal, cast, get_args
+from typing import Any, Literal, cast, get_args
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -168,9 +168,8 @@ async def byok_models() -> dict[str, Any]:
 
 @app.post("/api/lsp/hover")
 async def hover(payload: HoverPayload) -> dict[str, Any]:
-    from lsprotocol import types as lsp
-
     from kedi.lsp.features import compute_hover
+    from lsprotocol import types as lsp
 
     python_hover = await asyncio.to_thread(
         PYRIGHT.hover,

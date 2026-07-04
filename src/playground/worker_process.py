@@ -5,8 +5,9 @@ import json
 import os
 import sys
 import urllib.request
+from collections.abc import Mapping
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
-from typing import Any, Mapping
+from typing import Any
 
 from opentelemetry.trace import get_tracer
 

@@ -1,11 +1,16 @@
 .git
 .gitignore
+.github
 .pytest_cache
+.ruff_cache
 .venv
 __pycache__
 *.py[cod]
 *.log
+*.egg-info
 .coverage
+build
+dist
 htmlcov
 models
 tests

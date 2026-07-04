@@ -1,0 +1,122 @@
+name: Test and deploy Space
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hugging-face-space-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Authenticate private Kedi dependency
+        env:
+          KEDI_GITHUB_TOKEN: ${{ secrets.KEDI_GITHUB_TOKEN }}
+        run: |
+          test -n "$KEDI_GITHUB_TOKEN" || {
+            echo "::error::Add KEDI_GITHUB_TOKEN with read access to kedi-lang/kedi."
+            exit 1
+          }
+          git config --global \
+            url."https://x-access-token:${KEDI_GITHUB_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Check code
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run pytest -q
+
+      - name: Build Python package
+        run: uv build
+
+      - name: Build production container
+        env:
+          KEDI_GITHUB_TOKEN: ${{ secrets.KEDI_GITHUB_TOKEN }}
+        run: |
+          docker build \
+            --secret id=KEDI_GITHUB_TOKEN,env=KEDI_GITHUB_TOKEN \
+            --build-arg KEDI_INSTALL_MODE=dev \
+            -t kedi-playground .
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Hugging Face configuration
+        env:
+          HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          KEDI_GITHUB_TOKEN: ${{ secrets.KEDI_GITHUB_TOKEN }}
+        run: |
+          test -n "$HF_SPACE_ID" || {
+            echo "::error::Set the HF_SPACE_ID repository variable to owner/space."
+            exit 1
+          }
+          test -n "$HF_TOKEN" || {
+            echo "::error::Add an HF_TOKEN repository secret with write access."
+            exit 1
+          }
+          test -n "$KEDI_GITHUB_TOKEN" || {
+            echo "::error::Add KEDI_GITHUB_TOKEN with read access to kedi-lang/kedi."
+            exit 1
+          }
+
+      - name: Configure Hugging Face Space
+        env:
+          HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          KEDI_GITHUB_TOKEN: ${{ secrets.KEDI_GITHUB_TOKEN }}
+        run: |
+          python -m pip install --disable-pip-version-check huggingface_hub
+          python << 'PYTHON_EOF'
+          import os
+
+          from huggingface_hub import HfApi
+
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          space_id = os.environ["HF_SPACE_ID"]
+          api.create_repo(
+              repo_id=space_id,
+              repo_type="space",
+              space_sdk="docker",
+              exist_ok=True,
+          )
+          api.add_space_secret(
+              repo_id=space_id,
+              key="KEDI_GITHUB_TOKEN",
+              value=os.environ["KEDI_GITHUB_TOKEN"],
+          )
+          PYTHON_EOF
+
+      - name: Sync repository to Hugging Face
+        uses: huggingface/hub-sync@v0.1.0
+        with:
+          github_repo_id: ${{ github.repository }}
+          huggingface_repo_id: ${{ vars.HF_SPACE_ID }}
+          hf_token: ${{ secrets.HF_TOKEN }}
+          space_sdk: docker

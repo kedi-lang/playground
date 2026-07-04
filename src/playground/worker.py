@@ -5,8 +5,9 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Literal
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PLAYGROUND_ROOT = PACKAGE_ROOT.parents[1]

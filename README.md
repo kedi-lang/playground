@@ -1,107 +1,101 @@
 # Kedi Playground
 
-This proof of concept runs the same Kedi source through:
-
-- Bonsai 1.7B Q1 in the browser with wllama/WebGPU;
-- Ternary Bonsai 1.7B q2 in the browser with Transformers.js/WebGPU;
-- Pydantic AI on the backend with a browser-supplied provider key.
+Kedi Playground runs Kedi programs with browser-local WebGPU models or a
+Pydantic AI provider selected through BYOK. User-authored Python executes in an
+isolated Pyodide worker. Model weights download directly to the visitor's
+browser cache and are not stored by the server.
 
 Runtime selection is owned by the model registry. The UI exposes model names,
 not browser inference engines.
 
-## Hugging Face Space
-
-This repository is ready for a Docker Space. The container listens on port
-`7860` and runs as user `1000`. The `KEDI_INSTALL_MODE` Space build variable
-selects the Kedi source:
-
-- `prod` installs the latest `kedi[playground]` release from PyPI.
-- `dev` is the current default and installs `KEDI_REVISION` from
-  `KEDI_REPOSITORY`. The defaults select the private `kedi_playground` branch,
-  so dev builds require a read-only `GITHUB_TOKEN` Space secret.
-
-Use `dev` until the PyPI release contains the playground adapter APIs. The
-Docker build verifies those imports and rejects an incompatible production
-release instead of creating a broken image.
-
-The GitHub token is mounted as a BuildKit secret only for the dependency-install
-step and is not stored in an image layer.
-
-The model files are intentionally not copied into the image. WebGPU inference
-downloads them directly into each visitor's browser cache.
-
-Build and run locally:
+## Run locally
 
 ```bash
-# Development: Kedi's kedi_playground branch (default)
-GH_TOKEN="$(gh auth token)" docker build \
-  --secret id=GITHUB_TOKEN,env=GH_TOKEN \
-  -t kedi-playground:dev .
+uv sync --group dev
+uv run kedi-playground
+```
 
-# Production: latest Kedi release from PyPI
-docker build \
-  --build-arg KEDI_INSTALL_MODE=prod \
+Open <http://127.0.0.1:8787>.
+
+## Docker
+
+The default image currently installs the private `kedi_playground` branch
+because the required browser adapter is newer than the latest PyPI release:
+
+```bash
+KEDI_GITHUB_TOKEN="$(gh auth token)" \
+  docker build \
+  --secret id=KEDI_GITHUB_TOKEN,env=KEDI_GITHUB_TOKEN \
   -t kedi-playground .
-
 docker run --rm -p 7860:7860 kedi-playground
 ```
 
-Then open <http://127.0.0.1:7860>.
+Select another development revision explicitly:
 
-Environment values and `HF_TOKEN` are stored in browser local storage. BYOK
-runs pass the saved non-Hugging Face values to a short-lived worker process,
-without mutating the server environment. The BYOK model list is sourced from
-Pydantic AI's `KnownModelName`. The Models tab accepts labelled custom
-`provider:model` entries, checks their provider through Pydantic AI, and
-normalizes the selected ID before adapter construction.
+```bash
+docker build \
+  --build-arg KEDI_INSTALL_MODE=dev \
+  --build-arg KEDI_REVISION=kedi_playground \
+  -t kedi-playground:dev .
+```
 
-The selected execution mode, models, custom model registries, and Kedi source
-are retained for the browser session. Custom browser models use a Hugging Face
-repository and model filename: `.gguf` selects wllama, while `.onnx` selects
-Transformers.js and exposes a dtype choice. The Model settings tab exposes the
-shared Pydantic AI and WebGPU controls: temperature, maximum output tokens,
-top-p, and an optional seed. These values are adapter defaults for the run;
-Kedi `> settings:` directives still override them inside their active scope.
+After a compatible Kedi release reaches PyPI, production mode installs the
+latest published `kedi[playground]`:
+
+```bash
+docker build --build-arg KEDI_INSTALL_MODE=prod -t kedi-playground:prod .
+```
+
+The GitHub token is mounted as a BuildKit secret only for dependency
+installation and is not stored in an image layer. The container listens on port
+`7860` and runs as user `1000`.
+
+## Hugging Face Space
+
+The repository is configured as a Docker Space on port `7860`. GitHub Actions
+runs tests, builds the package and container, then syncs successful `main`
+pushes to Hugging Face.
+
+Configure the GitHub repository with:
+
+- Repository secret `HF_TOKEN`: a Hugging Face token with write access.
+- Repository secret `KEDI_GITHUB_TOKEN`: a read-only token for the private
+  `kedi-lang/kedi` repository.
+- Repository variable `HF_SPACE_ID`: the target Space as `owner/space`.
+
+The workflow creates the Docker Space when needed, installs
+`KEDI_GITHUB_TOKEN` as an HF Space build secret, then mirrors the repository
+with `huggingface/hub-sync`. Hugging Face rebuilds the Space after each sync.
+
+## Runtime behavior
+
+- Bonsai GGUF uses wllama and browser-owned OPFS storage.
+- Ternary Bonsai ONNX uses Transformers.js and the browser cache.
+- Custom `.gguf` and `.onnx` models remain browser-local.
+- BYOK credentials and `HF_TOKEN` remain in browser local storage.
+- Model settings and source code remain in browser session storage.
+- Remote MCP supports HTTP and SSE; `stdio` is rejected.
+
 Both WebGPU and BYOK runs execute in a short-lived worker. BYOK uses
-`PydanticAdapter`; browser inference uses `WebGPUAdapter` directly. Logfire is
-configured inside the worker only when `LOGFIRE_ENABLED` is set and a
-`LOGFIRE_TOKEN` is present, so per-user tokens never mutate the long-lived
-FastAPI process. Pydantic AI instrumentation covers BYOK runs, while
-WebGPU runs emit the same GenAI-shaped trace hierarchy: an agent run span,
-`chat <model>` spans with messages, settings, tool definitions, finish reasons,
-and token usage, plus child spans for actual tool executions.
+`PydanticAdapter`; browser inference uses `WebGPUAdapter`. Logfire is configured
+inside the worker only when `LOGFIRE_ENABLED` is set and a `LOGFIRE_TOKEN` is
+present, so per-user tokens never mutate the long-lived FastAPI process.
 
-Local model storage is browser-owned:
+The playground server has no model download or model-file endpoint.
+User-authored Python and type expressions execute in an isolated Pyodide Web
+Worker and never run in the server's Python process. `WebGPUAdapter` owns tool
+registration and execution, remote MCP discovery, profile overrides, output
+validation and the browser model loop.
 
-- Bonsai GGUF uses wllama's OPFS-backed cache. A cache miss downloads from
-  Hugging Face directly into the requesting browser.
-- Ternary Bonsai uses the Transformers.js browser cache with the same
-  cache-first behavior.
-- A user-selected GGUF file can be loaded without copying it to the server.
+WebGPU context management uses a percentage-based soft limit. wllama expands
+its context automatically when the request approaches 80% of the active
+window. Transformers.js reserves output space using its tokenizer count. BYOK
+requests are not altered by this browser-only policy.
 
-The playground server has no model download or model-file endpoint. Downloads
-report live progress and can be cancelled in the browser. User-authored Python
-and type expressions execute in an isolated Pyodide Web Worker; they never run
-in the server's Python process. Browser adapter MCP profiles accept remote HTTP
-and SSE servers only; `stdio` is rejected. Kedi procedure and Python tools are
-registered by `WebGPUAdapter`, which owns tool execution, remote MCP discovery,
-profile overrides, output validation, and the browser model loop. The browser
-selects wllama or Transformers.js from the model registry. BYOK remains a
-separate `PydanticAdapter` execution path.
-
-WebGPU context management keeps a percentage-based soft limit instead of a
-fixed prompt ceiling. wllama starts with a small context and expands it
-automatically, without redownloading cached weights, when the estimated request
-approaches 80% of the active window. If the estimate is low, wllama's exact
-overflow count triggers one corrected retry. Transformers.js uses its tokenizer
-count to reserve output space against the same soft threshold. BYOK requests are
-not altered by this browser-only policy.
-
-The Monaco editor parses Kedi incrementally in the browser with the
-`tree-sitter-kedi` WebAssembly grammar and the grammar's canonical
-`queries/highlights.scm`. Hover requests continue to use the server's
-`kedi.lsp` and Pyright integration. Rebuild the checked-in browser parser
-assets after changing the grammar or highlight query:
+The Monaco editor parses Kedi incrementally with the `tree-sitter-kedi`
+WebAssembly grammar and its canonical highlight query. Hover requests use the
+server's `kedi.lsp` and Pyright integration. Rebuild the checked-in browser
+parser assets after changing the grammar or highlight query:
 
 ```bash
 make playground-tree-sitter

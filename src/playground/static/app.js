@@ -10,9 +10,21 @@ import { assertWebGPU, formatBytes } from "./runtimes/runtime.js";
 import { TransformersRuntime } from "./runtimes/transformers-runtime.js";
 import { WllamaRuntime } from "./runtimes/wllama-runtime.js";
 
-const DEFAULT_SOURCE = `>> Give me a [country]
+const EXAMPLES = Object.freeze({
+  capital: `>> Give me a [country]
 >> What's the [capital] of <country>?
-= Capital of <country> is <capital>.`;
+= Capital of <country> is <capital>.`,
+  contact: `>> From "Aylin Kaya is a product designer based in Berlin", extract her [name], [role], and [city].
+= <name> works as a <role> in <city>.`,
+  delivery: `@delivery_estimate(city: str) -> str:
+  = Delivery to <city> takes 3 business days.
+
+> use: delivery_estimate
+
+>> Choose a European [city], call delivery_estimate with it, and return the [estimate].
+= <estimate>`,
+});
+const DEFAULT_SOURCE = EXAMPLES.capital;
 const ENV_KEY = "kedi.playground.env";
 const SESSION_KEY = "kedi.playground.session";
 const DEFAULT_MODEL_SETTINGS = Object.freeze({
@@ -84,8 +96,12 @@ const initialSession = sessionValues();
 const sourceEditor = await createKediEditor(
   ui.source,
   initialSession.source || DEFAULT_SOURCE,
-  (source) => saveSession({ source }),
+  (source) => {
+    saveSession({ source });
+    updateExampleTabs(source);
+  },
 );
+updateExampleTabs(sourceEditor.getValue());
 let customByokModels = Array.isArray(initialSession.customByokModels)
   ? initialSession.customByokModels.filter(isByokModel)
   : [];
@@ -124,6 +140,16 @@ void pythonRuntime.preload().then(
 loadByokModels();
 
 function bindEvents() {
+  for (const tab of document.querySelectorAll("[data-example]")) {
+    tab.addEventListener("click", () => {
+      const source = EXAMPLES[tab.dataset.example];
+      if (!source) {
+        return;
+      }
+      sourceEditor.setValue(source);
+      sourceEditor.focus();
+    });
+  }
   for (const tab of document.querySelectorAll("[data-control-tab]")) {
     tab.addEventListener("click", () => {
       setControlTab(tab.dataset.controlTab);
@@ -196,6 +222,14 @@ function bindEvents() {
     applyModelSettings();
     saveModelSettings();
   });
+}
+
+function updateExampleTabs(source) {
+  for (const tab of document.querySelectorAll("[data-example]")) {
+    const selected = EXAMPLES[tab.dataset.example] === source;
+    tab.classList.toggle("active", selected);
+    tab.setAttribute("aria-selected", String(selected));
+  }
 }
 
 function selectedMode() {

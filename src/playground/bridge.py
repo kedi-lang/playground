@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from collections.abc import Mapping
 from threading import Condition, Lock
-from typing import Any, Mapping
+from typing import Any
 from uuid import uuid4
 
 
