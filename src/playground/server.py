@@ -28,6 +28,8 @@ POLL_SECONDS = 25
 _INTERNAL_BRIDGE_LOCK = threading.Lock()
 _INTERNAL_BRIDGE_TOKENS: dict[str, str] = {}
 PYRIGHT = PyrightServer()
+_LONG_LIVED_ASSET_PREFIXES = ("/grammars/", "/vendor/")
+_LONG_LIVED_ASSET_SUFFIXES = {".scm", ".wasm"}
 
 
 @asynccontextmanager
@@ -48,8 +50,18 @@ async def add_browser_isolation_headers(
     response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
     response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
     response.headers["Cross-Origin-Resource-Policy"] = "cross-origin"
-    response.headers["Cache-Control"] = "no-store"
+    response.headers["Cache-Control"] = _cache_control_for_path(request.url.path)
     return response
+
+
+def _cache_control_for_path(path: str) -> str:
+    if path == "/healthz" or path.startswith("/api/"):
+        return "no-store"
+    if path.startswith(_LONG_LIVED_ASSET_PREFIXES) or Path(path).suffix in (
+        _LONG_LIVED_ASSET_SUFFIXES
+    ):
+        return "public, max-age=86400, stale-while-revalidate=604800"
+    return "public, max-age=0, must-revalidate"
 
 
 @app.get("/healthz", include_in_schema=False)

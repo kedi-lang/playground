@@ -1,11 +1,4 @@
 export const MODEL_REGISTRY = Object.freeze({
-  "bonsai-1.7b-q1": Object.freeze({
-    id: "bonsai-1.7b-q1",
-    label: "Bonsai 1.7B",
-    engine: "wllama",
-    repo: "prism-ml/Bonsai-1.7B-gguf",
-    file: "Bonsai-1.7B-Q1_0.gguf",
-  }),
   "ternary-bonsai-1.7b-q2": Object.freeze({
     id: "ternary-bonsai-1.7b-q2",
     label: "Ternary Bonsai 1.7B",
@@ -13,6 +6,13 @@ export const MODEL_REGISTRY = Object.freeze({
     model: "onnx-community/Ternary-Bonsai-1.7B-ONNX",
     dtype: "q2",
     device: "webgpu",
+  }),
+  "bonsai-1.7b-q1": Object.freeze({
+    id: "bonsai-1.7b-q1",
+    label: "Bonsai 1.7B",
+    engine: "wllama",
+    repo: "prism-ml/Bonsai-1.7B-gguf",
+    file: "Bonsai-1.7B-Q1_0.gguf",
   }),
 });
 

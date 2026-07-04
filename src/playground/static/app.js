@@ -124,20 +124,31 @@ bindEvents();
 const initialMode = initialSession.mode === "byok" ? "byok" : "local";
 document.querySelector(`input[name="mode"][value="${initialMode}"]`).checked = true;
 setMode(initialMode);
-void pythonRuntime.preload().then(
-  () => {
-    if (!activeRun) {
-      setStatus("Ready");
-    }
-  },
-  (error) => {
-    if (!activeRun) {
-      setStatus("Sandbox unavailable");
-      setProgress(error?.message ?? String(error));
-    }
-  },
-);
+schedulePythonPreload();
 loadByokModels();
+
+function schedulePythonPreload() {
+  const preload = () => {
+    void pythonRuntime.preload().then(
+      () => {
+        if (!activeRun) {
+          setStatus("Ready");
+        }
+      },
+      (error) => {
+        if (!activeRun) {
+          setStatus("Sandbox unavailable");
+          setProgress(error?.message ?? String(error));
+        }
+      },
+    );
+  };
+  if (globalThis.requestIdleCallback) {
+    globalThis.requestIdleCallback(preload, { timeout: 1_500 });
+    return;
+  }
+  globalThis.setTimeout(preload, 750);
+}
 
 function bindEvents() {
   for (const tab of document.querySelectorAll("[data-example]")) {

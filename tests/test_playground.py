@@ -67,7 +67,10 @@ def _run_webgpu(
 
 def test_model_registry_is_public_and_rejects_unknown_model() -> None:
     models = public_model_registry()
-    assert [model["engine"] for model in models] == ["wllama", "transformers"]
+    assert [model["id"] for model in models] == [
+        "ternary-bonsai-1.7b-q2",
+        "bonsai-1.7b-q1",
+    ]
     assert browser_model("bonsai-1.7b-q1").file == "Bonsai-1.7B-Q1_0.gguf"
     with pytest.raises(ValueError, match="Unknown browser model"):
         browser_model("missing")
@@ -396,12 +399,23 @@ def test_playground_responses_enable_cross_origin_isolation() -> None:
     async def call_next(_request: Any) -> server.Response:
         return server.Response()
 
-    response = asyncio.run(server.add_browser_isolation_headers(SimpleNamespace(), call_next))
+    request = SimpleNamespace(url=SimpleNamespace(path="/api/run"))
+    response = asyncio.run(server.add_browser_isolation_headers(request, call_next))
 
     assert response.headers["Cross-Origin-Opener-Policy"] == "same-origin"
     assert response.headers["Cross-Origin-Embedder-Policy"] == "require-corp"
     assert response.headers["Cross-Origin-Resource-Policy"] == "cross-origin"
     assert response.headers["Cache-Control"] == "no-store"
+    assert server._cache_control_for_path("/") == "public, max-age=0, must-revalidate"
+    assert server._cache_control_for_path("/app.js") == "public, max-age=0, must-revalidate"
+    assert server._cache_control_for_path("/healthz") == "no-store"
+    assert server._cache_control_for_path("/api/models") == "no-store"
+    assert server._cache_control_for_path("/grammars/kedi/tree-sitter-kedi.wasm") == (
+        "public, max-age=86400, stale-while-revalidate=604800"
+    )
+    assert server._cache_control_for_path("/vendor/web-tree-sitter.js") == (
+        "public, max-age=86400, stale-while-revalidate=604800"
+    )
 
 
 def test_bridge_request_response_and_duplicate_rejection() -> None:
@@ -903,6 +917,7 @@ def test_model_downloads_are_browser_owned() -> None:
     index_source = (static / "index.html").read_text(encoding="utf-8")
     editor_source = (static / "kedi-editor.js").read_text(encoding="utf-8")
     highlighter_source = (static / "tree-sitter-highlighter.js").read_text(encoding="utf-8")
+    model_registry_source = (static / "model-registry.js").read_text(encoding="utf-8")
     styles_source = (static / "styles.css").read_text(encoding="utf-8")
     wllama_source = (static / "runtimes" / "wllama-runtime.js").read_text(encoding="utf-8")
     transformers_source = (static / "runtimes" / "transformers-runtime.js").read_text(
@@ -952,7 +967,7 @@ def test_model_downloads_are_browser_owned() -> None:
     assert "Atomics.notify(control, 0)" in pyodide_runtime_source
     assert "pending.stdout += echo" in pyodide_runtime_source
     assert "stdout: pending.stdout" in pyodide_runtime_source
-    assert "pyodide-worker.js?v=${Date.now()}" in pyodide_runtime_source
+    assert 'new Worker("/pyodide-worker.js"' in pyodide_runtime_source
     assert 'event.data?.type === "ready"' in pyodide_runtime_source
     assert 'event.data?.type === "ready_error"' in pyodide_runtime_source
     assert "await this.preload()" in pyodide_runtime_source
@@ -961,6 +976,7 @@ def test_model_downloads_are_browser_owned() -> None:
     assert 'type: "ready_error"' in worker_source
     assert "const pythonRuntime = new PyodideRuntime(setStatus, browserIo())" in app_source
     assert "pythonRuntime.preload()" in app_source
+    assert "requestIdleCallback(preload" in app_source
     assert "browserIo(), pythonRuntime" in app_source
     assert "this.python.dispose()" not in adapter_source
     assert 'id="stdin-form"' in index_source
@@ -973,6 +989,13 @@ def test_model_downloads_are_browser_owned() -> None:
     assert "registerDocumentSemanticTokensProvider" in editor_source
     assert "registerHoverProvider" in editor_source
     assert "createKediTreeSitterHighlighter" in editor_source
+    assert "preloadKediTreeSitterResources" in editor_source
+    assert index_source.count('rel="preload"') == 3
+    assert "fonts.googleapis.com/css2" in index_source
+    assert "@import url(" not in styles_source
+    assert model_registry_source.index('"ternary-bonsai-1.7b-q2"') < (
+        model_registry_source.index('"bonsai-1.7b-q1"')
+    )
     assert "SemanticTokensEdits" not in editor_source
     assert "tokenEdits" in highlighter_source
     assert "column: row === startPosition.row ? startPosition.column : 0" in highlighter_source

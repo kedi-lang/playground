@@ -56,7 +56,7 @@ export class PyodideRuntime {
       return;
     }
     this.onStatus("Loading Python sandbox");
-    this.worker = new Worker(`/pyodide-worker.js?v=${Date.now()}`, {
+    this.worker = new Worker("/pyodide-worker.js", {
       type: "module",
     });
     this.ready = new Promise((resolve, reject) => {

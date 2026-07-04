@@ -2,6 +2,7 @@ import {
   KEDI_SEMANTIC_TOKEN_MODIFIERS,
   KEDI_SEMANTIC_TOKEN_TYPES,
   createKediTreeSitterHighlighter,
+  preloadKediTreeSitterResources,
 } from "./tree-sitter-highlighter.js";
 
 const MONACO_BASE =
@@ -12,9 +13,10 @@ let languageRegistered = false;
 let workerUrl;
 const executionDecorations = new WeakMap();
 const highlighters = new WeakMap();
+const treeSitterResources = preloadKediTreeSitterResources();
 
 export async function createKediEditor(element, value, onChange) {
-  const monaco = await loadMonaco();
+  const [monaco] = await Promise.all([loadMonaco(), treeSitterResources]);
   await registerKediLanguage(monaco);
   monaco.editor.defineTheme("kedi-dark", {
     base: "vs-dark",

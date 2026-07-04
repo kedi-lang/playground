@@ -83,6 +83,10 @@ const CAPTURE_TOKEN_TYPES = new Map([
 
 let resourcesPromise;
 
+export function preloadKediTreeSitterResources() {
+  return loadResources();
+}
+
 export async function createKediTreeSitterHighlighter() {
   const resources = await loadResources();
   return new KediTreeSitterHighlighter(resources);
