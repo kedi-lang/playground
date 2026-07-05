@@ -12,10 +12,16 @@ not browser inference engines.
 
 ```bash
 uv sync --group dev
+gh run download \
+  --name pydantic-monty-pyodide \
+  --dir src/playground/static/vendor
 uv run kedi-playground
 ```
 
 Open <http://127.0.0.1:8787>.
+
+The wheel artifact is produced by the latest successful `space.yml` workflow.
+Run that workflow manually first when no artifact is available.
 
 ## Docker
 
@@ -62,15 +68,18 @@ Configure the GitHub repository with:
   `kedi-lang/kedi` repository.
 - Repository variable `HF_SPACE_ID`: the target Space as `owner/space`.
 
-The workflow creates the Docker Space when needed, installs
-`KEDI_GITHUB_TOKEN` as an HF Space build secret, then mirrors the repository
-with `huggingface/hub-sync`. Hugging Face rebuilds the Space after each sync.
+The workflow builds and tests a Pyodide-compatible `pydantic-monty` wheel,
+creates the Docker Space when needed, installs `KEDI_GITHUB_TOKEN` as an HF
+Space build secret, then uploads a production staging directory. Hugging Face
+rebuilds the Space after each upload.
 
 ## Runtime behavior
 
 - Bonsai GGUF uses wllama and browser-owned OPFS storage.
 - Ternary Bonsai ONNX uses Transformers.js and the browser cache.
 - Custom `.gguf` and `.onnx` models remain browser-local.
+- Embedded Python uses Pyodide 314 and the workflow-built Monty WebAssembly
+  wheel.
 - BYOK credentials and `HF_TOKEN` remain in browser local storage.
 - Model settings and source code remain in browser session storage.
 - Remote MCP supports HTTP and SSE; `stdio` is rejected.

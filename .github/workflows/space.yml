@@ -8,16 +8,108 @@ on:
 permissions:
   contents: read
 
+env:
+  MONTY_VERSION: "0.0.18"
+  MONTY_REVISION: "45a3b2d57e6ce723fed4166fb032242ece74a663"
+  MONTY_WHEEL: pydantic_monty-0.0.18-cp314-cp314-pyemscripten_2026_0_wasm32.whl
+  PYODIDE_VERSION: "314.0.2"
+
 concurrency:
   group: hugging-face-space-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  build-monty-wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Playground
+        uses: actions/checkout@v4
+
+      - name: Checkout Monty
+        uses: actions/checkout@v4
+        with:
+          repository: pydantic/monty
+          ref: ${{ env.MONTY_REVISION }}
+          path: .build/monty
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Install Pyodide build tools
+        run: |
+          uv venv --python 3.14 .build/pyodide-tools
+          uv pip install \
+            --python .build/pyodide-tools/bin/python \
+            pyodide-build==0.36.0
+
+      - name: Prepare Monty for the browser runtime
+        run: python scripts/prepare-monty-pyodide.py .build/monty
+
+      - name: Read PyEmscripten toolchain configuration
+        id: pyodide-config
+        run: |
+          pyodide=.build/pyodide-tools/bin/pyodide
+          echo "emscripten-version=$("$pyodide" config get emscripten_version)" >> "$GITHUB_OUTPUT"
+          echo "pyodide-abi-version=$("$pyodide" config get pyodide_abi_version)" >> "$GITHUB_OUTPUT"
+          echo "rustflags=$("$pyodide" config get rustflags)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Emscripten
+        uses: emscripten-core/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984
+        with:
+          version: ${{ steps.pyodide-config.outputs.emscripten-version }}
+
+      - name: Build pydantic-monty for Pyodide
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUSTFLAGS: ${{ steps.pyodide-config.outputs.rustflags }}
+          MATURIN_PYEMSCRIPTEN_PLATFORM_VERSION: ${{ steps.pyodide-config.outputs.pyodide-abi-version }}
+        with:
+          working-directory: .build/monty
+          target: wasm32-unknown-emscripten
+          args: >-
+            --release
+            --out ../../monty-dist
+            --interpreter 3.14
+            --manifest-path crates/monty-python/Cargo.toml
+          rust-toolchain: "1.95.0"
+          sccache: true
+
+      - name: Verify wheel filename
+        run: test -f "monty-dist/$MONTY_WHEEL"
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Smoke-test wheel in real Pyodide
+        run: |
+          npm install --no-save "pyodide@$PYODIDE_VERSION"
+          node scripts/test-monty-pyodide.mjs "monty-dist/$MONTY_WHEEL"
+
+      - name: Upload Monty wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: pydantic-monty-pyodide
+          path: monty-dist/${{ env.MONTY_WHEEL }}
+          if-no-files-found: error
+
   verify:
+    needs: build-monty-wheel
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Download Monty wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: pydantic-monty-pyodide
+          path: src/playground/static/vendor
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -69,11 +161,17 @@ jobs:
 
   deploy:
     if: github.event_name != 'pull_request'
-    needs: verify
+    needs: [build-monty-wheel, verify]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Download Monty wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: pydantic-monty-pyodide
+          path: src/playground/static/vendor
 
       - name: Validate Hugging Face configuration
         env:
@@ -124,10 +222,16 @@ jobs:
       - name: Prepare Hugging Face Space metadata
         run: |
           python << 'PYTHON_EOF'
+          import shutil
           from pathlib import Path
 
-          readme_path = Path("README.md")
-          body = readme_path.read_text(encoding="utf-8")
+          target = Path(".space")
+          target.mkdir()
+          shutil.copy2("Dockerfile", target / "Dockerfile")
+          shutil.copy2("LICENSE", target / "LICENSE")
+          shutil.copytree("src", target / "src")
+
+          body = Path("README.md").read_text(encoding="utf-8")
           metadata = """---
           title: Kedi Playground
           emoji: 🐈
@@ -138,13 +242,22 @@ jobs:
           pinned: false
           ---
           """
-          readme_path.write_text(f"{metadata}\n{body}", encoding="utf-8")
+          (target / "README.md").write_text(f"{metadata}\n{body}", encoding="utf-8")
           PYTHON_EOF
 
       - name: Sync repository to Hugging Face
-        uses: huggingface/hub-sync@v0.1.0
-        with:
-          github_repo_id: ${{ github.repository }}
-          huggingface_repo_id: ${{ vars.HF_SPACE_ID }}
-          hf_token: ${{ secrets.HF_TOKEN }}
-          space_sdk: docker
+        env:
+          HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python << 'PYTHON_EOF'
+          import os
+
+          from huggingface_hub import HfApi
+
+          HfApi(token=os.environ["HF_TOKEN"]).upload_folder(
+              repo_id=os.environ["HF_SPACE_ID"],
+              repo_type="space",
+              folder_path=".space",
+          )
+          PYTHON_EOF

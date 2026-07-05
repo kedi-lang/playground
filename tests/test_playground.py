@@ -108,10 +108,15 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert "title: Kedi Playground" in workflow
     assert "colorTo: indigo" in workflow
     assert "app_port: 7860" in workflow
-    assert "huggingface/hub-sync@v0.1.0" in workflow
-    assert workflow.count("uses: actions/checkout@v4") == 2
-    assert "needs: verify" in workflow
-    assert "space_sdk: docker" in workflow
+    assert "build-monty-wheel:" in workflow
+    assert 'MONTY_REVISION: "45a3b2d57e6ce723fed4166fb032242ece74a663"' in workflow
+    assert "ref: ${{ env.MONTY_REVISION }}" in workflow
+    assert "target: wasm32-unknown-emscripten" in workflow
+    assert "Smoke-test wheel in real Pyodide" in workflow
+    assert 'folder_path=".space"' in workflow
+    assert workflow.count("uses: actions/checkout@v4") == 4
+    assert "needs: [build-monty-wheel, verify]" in workflow
+    assert 'space_sdk="docker"' in workflow
     assert "api.add_space_secret(" in workflow
 
 
@@ -955,7 +960,14 @@ def test_model_downloads_are_browser_owned() -> None:
     assert "getattr(builtins, value.__name__, None) is value" in worker_source
     assert '"__name__": "__kedi_pyodide__"' in worker_source
     assert "pyodide.setStdin({ stdin: readStdin, isatty: true })" in worker_source
-    assert 'pyodide.loadPackage(["micropip", "pydantic", "protobuf", "pygments"])' in worker_source
+    assert "pyodide/v314.0.2/full/pyodide.mjs" in worker_source
+    assert 'pyodide.loadPackage(["micropip", "pydantic", "pygments"])' in worker_source
+    assert '"protobuf==6.33.5"' in worker_source
+    assert (
+        "/vendor/pydantic_monty-0.0.18-cp314-cp314-pyemscripten_2026_0_wasm32.whl" in worker_source
+    )
+    assert "import pydantic_monty" in worker_source
+    assert 'pydantic_monty.Monty("1 + 2").run() == 3' in worker_source
     assert '"opentelemetry-api==1.41.1"' in worker_source
     assert '"opentelemetry-semantic-conventions==0.62b1"' in worker_source
     assert '"logfire==4.33.0"' in worker_source

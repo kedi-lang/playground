@@ -1,4 +1,4 @@
-import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.mjs";
+import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.2/full/pyodide.mjs";
 
 const pyodidePromise = initializePyodide();
 void pyodidePromise.then(
@@ -11,22 +11,33 @@ void pyodidePromise.then(
 );
 const STDIN_HEADER_BYTES = 16;
 const STDIN_CAPACITY = 1024 * 1024;
+const MONTY_WHEEL =
+  "/vendor/pydantic_monty-0.0.18-cp314-cp314-pyemscripten_2026_0_wasm32.whl";
 let activeRequestId = null;
 
 async function initializePyodide() {
   const pyodide = await loadPyodide();
-  await pyodide.loadPackage(["micropip", "pydantic", "protobuf", "pygments"]);
+  await pyodide.loadPackage(["micropip", "pydantic", "pygments"]);
+  pyodide.globals.set(
+    "__kedi_monty_wheel_url",
+    new URL(MONTY_WHEEL, self.location.origin).href,
+  );
   await pyodide.runPythonAsync(`
 import micropip
 await micropip.install([
+    "protobuf==6.33.5",
     "opentelemetry-api==1.41.1",
     "opentelemetry-sdk==1.41.1",
     "opentelemetry-exporter-otlp-proto-http==1.41.1",
     "opentelemetry-instrumentation==0.62b1",
     "opentelemetry-semantic-conventions==0.62b1",
     "logfire==4.33.0",
+    __kedi_monty_wheel_url,
 ])
+import pydantic_monty
+assert pydantic_monty.Monty("1 + 2").run() == 3
 `);
+  pyodide.globals.delete("__kedi_monty_wheel_url");
   return pyodide;
 }
 
