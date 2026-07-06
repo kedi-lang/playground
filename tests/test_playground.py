@@ -1244,6 +1244,7 @@ def test_model_downloads_are_browser_owned() -> None:
     assert 'setStatus("Loading model");\n  await runtime.load(config' not in app_source
     assert "sourceDefinitelyDoesNotNeedModel(source)" in app_source
     assert "const source = sourceEditor.getValue();" in app_source
+    assert 'line.includes("[")' not in app_source
     assert "this|errors|require" in app_source
     assert "async modelRuntime(signal)" in adapter_source
     assert "this.runtime = await this.loadRuntime(signal)" in adapter_source

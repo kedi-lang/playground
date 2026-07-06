@@ -400,7 +400,7 @@ function sourceDefinitelyDoesNotNeedModel(source) {
   if (!meaningfulLines.length) {
     return true;
   }
-  if (meaningfulLines.some((line) => line.startsWith(">>") || line.includes("["))) {
+  if (meaningfulLines.some((line) => line.startsWith(">>"))) {
     return false;
   }
   const importLines = meaningfulLines.filter((line) => line.startsWith("> import:"));
