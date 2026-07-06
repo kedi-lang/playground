@@ -1,0 +1,281 @@
+from __future__ import annotations
+
+import json
+import os
+import select
+import shutil
+import subprocess
+import sys
+import threading
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
+
+from playground import sandbox_worker
+
+PACKAGE_ROOT = Path(__file__).resolve().parent
+PLAYGROUND_ROOT = PACKAGE_ROOT.parents[1]
+
+DEFAULT_POOL_SIZE = 10
+DEFAULT_TIMEOUT = 60.0
+_NOBODY_MAP = "65534:65534:1"
+_DEFAULT_CHROOT = "/tmp/kedi-nsjail-root"
+
+
+class NsJailUnavailable(RuntimeError):
+    pass
+
+
+class NsJailWorker:
+    def __init__(self, command: list[str], *, env: Mapping[str, str]) -> None:
+        self._process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=dict(env),
+        )
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def request(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> Mapping[str, Any]:
+        if self._closed:
+            raise RuntimeError("NsJail worker is closed")
+        if self._process.stdin is None or self._process.stdout is None:
+            raise RuntimeError("NsJail worker pipes are not available")
+        with self._lock:
+            self._process.stdin.write(json.dumps(dict(payload), separators=(",", ":")) + "\n")
+            self._process.stdin.flush()
+            ready, _, _ = select.select([self._process.stdout], [], [], timeout)
+            if not ready:
+                self.close()
+                raise TimeoutError("Timed out waiting for NsJail worker")
+            line = self._process.stdout.readline()
+            if not line:
+                stderr = self._read_stderr()
+                self.close()
+                raise RuntimeError(stderr or "NsJail worker exited without a response")
+            response = json.loads(line)
+            if not isinstance(response, dict):
+                raise TypeError("NsJail worker response must be an object")
+            return response
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=1)
+
+    def _read_stderr(self) -> str:
+        stream = self._process.stderr
+        if stream is None:
+            return ""
+        if self._process.poll() is None:
+            return ""
+        ready, _, _ = select.select([stream], [], [], 0)
+        return stream.readline().strip() if ready else ""
+
+
+class NsJailPool:
+    def __init__(
+        self,
+        *,
+        size: int | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> None:
+        self.size = DEFAULT_POOL_SIZE if size is None else size
+        self.timeout = timeout
+        self._workers: list[NsJailWorker] = []
+        self._lock = threading.Lock()
+        self._enabled = False
+        self._closed = False
+        self._last_error: str | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    def start(self) -> None:
+        if self.size < 1:
+            self._last_error = "NsJail pool size is less than 1"
+            return
+        if os.environ.get("KEDI_NSJAIL_ENABLED", "1").lower() in {"0", "false", "off", "no"}:
+            self._last_error = "NsJail disabled by KEDI_NSJAIL_ENABLED"
+            return
+        try:
+            worker = self._new_worker()
+            self._self_test(worker)
+        except Exception as exc:  # noqa: BLE001 - pool availability is best-effort.
+            self._last_error = str(exc)
+            return
+        with self._lock:
+            self._workers.append(worker)
+            self._enabled = True
+        for _ in range(self.size - 1):
+            self._spawn_replacement()
+
+    @contextmanager
+    def lease(self) -> Iterator[NsJailWorker | None]:
+        worker = self._take_worker()
+        try:
+            yield worker
+        finally:
+            if worker is not None:
+                worker.close()
+                self._spawn_replacement()
+
+    def close(self) -> None:
+        self._closed = True
+        with self._lock:
+            workers = self._workers
+            self._workers = []
+        for worker in workers:
+            worker.close()
+
+    def _take_worker(self) -> NsJailWorker | None:
+        if not self._enabled:
+            return None
+        with self._lock:
+            return self._workers.pop() if self._workers else None
+
+    def _spawn_replacement(self) -> None:
+        if self._closed or not self._enabled:
+            return
+
+        def target() -> None:
+            try:
+                worker = self._new_worker()
+            except Exception as exc:  # noqa: BLE001 - keep the pool alive with fewer workers.
+                self._last_error = str(exc)
+                return
+            with self._lock:
+                if self._closed:
+                    worker.close()
+                elif len(self._workers) < self.size:
+                    self._workers.append(worker)
+                else:
+                    worker.close()
+
+        threading.Thread(target=target, daemon=True).start()
+
+    def _new_worker(self) -> NsJailWorker:
+        command = nsjail_command()
+        env = worker_environment()
+        return NsJailWorker(command, env=env)
+
+    def _self_test(self, worker: NsJailWorker) -> None:
+        response = worker.request(
+            {
+                "operation": "python",
+                "action": "evaluate_inline",
+                "code": "1 + 1",
+                "env": {},
+                "syncNames": [],
+                "kediLineOffset": 0,
+            },
+            timeout=min(self.timeout, 10),
+        )
+        if response.get("ok") is not True or response.get("result") != 2:
+            raise NsJailUnavailable(f"NsJail self-test failed: {response!r}")
+
+
+def nsjail_command() -> list[str]:
+    executable = os.environ.get("KEDI_NSJAIL_BIN") or shutil.which("nsjail")
+    if not executable:
+        raise NsJailUnavailable("nsjail executable was not found")
+
+    command = [
+        executable,
+        "-Mo",
+        "--quiet",
+        "--chroot",
+        sandbox_root(),
+        "--cwd",
+        "/tmp",
+        "--disable_proc",
+        "--user",
+        _NOBODY_MAP,
+        "--group",
+        _NOBODY_MAP,
+        "--time_limit",
+        os.environ.get("KEDI_NSJAIL_TIME_LIMIT", "300"),
+        "--rlimit_as",
+        os.environ.get("KEDI_NSJAIL_RLIMIT_AS", "512"),
+        "--rlimit_cpu",
+        os.environ.get("KEDI_NSJAIL_RLIMIT_CPU", "60"),
+        "--rlimit_fsize",
+        os.environ.get("KEDI_NSJAIL_RLIMIT_FSIZE", "16"),
+        "--rlimit_nofile",
+        os.environ.get("KEDI_NSJAIL_RLIMIT_NOFILE", "128"),
+        "--tmpfsmount",
+        "/tmp",
+    ]
+    for path in readonly_mounts():
+        command.extend(["-R", path])
+    command.extend(["--", sys.executable, str(Path(sandbox_worker.__file__).resolve())])
+    return command
+
+
+def sandbox_root() -> str:
+    root = Path(os.environ.get("KEDI_NSJAIL_CHROOT", _DEFAULT_CHROOT))
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return str(root)
+
+
+def readonly_mounts() -> list[str]:
+    candidates = [
+        "/usr/local",
+        "/usr/lib",
+        "/lib",
+        "/lib64",
+        "/opt/venv",
+        str(PLAYGROUND_ROOT / "src"),
+        "/dev/urandom",
+        "/dev/null",
+    ]
+    return [path for path in candidates if Path(path).exists()]
+
+
+def worker_environment() -> dict[str, str]:
+    env: dict[str, str] = {"HOME": "/tmp"}
+    for name in ("LANG", "LC_ALL", "PATH", "PYTHONPATH", "SSL_CERT_DIR", "SSL_CERT_FILE"):
+        value = os.environ.get(name)
+        if value:
+            env[name] = value
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONPATH"] = os.pathsep.join(
+        value
+        for value in (
+            str(PLAYGROUND_ROOT / "src"),
+            os.environ.get("PYTHONPATH", ""),
+        )
+        if value
+    )
+    return env
+
+
+__all__ = [
+    "NsJailPool",
+    "NsJailUnavailable",
+    "NsJailWorker",
+    "nsjail_command",
+    "readonly_mounts",
+    "worker_environment",
+]

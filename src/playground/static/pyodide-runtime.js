@@ -82,6 +82,10 @@ export class PyodideRuntime {
         this.rejectReady = null;
         return;
       }
+      if (event.data?.type === "status") {
+        this.onStatus(event.data.message || "Loading Python dependency");
+        return;
+      }
       if (event.data?.type === "stream") {
         const pending = this.pending.get(event.data.id);
         if (!pending) {

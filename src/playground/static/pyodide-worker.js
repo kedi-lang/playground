@@ -11,17 +11,34 @@ void pyodidePromise.then(
 );
 const STDIN_HEADER_BYTES = 16;
 const STDIN_CAPACITY = 1024 * 1024;
-const MONTY_WHEEL =
-  "/vendor/pydantic_monty-0.0.18-cp314-cp314-pyemscripten_2026_0_wasm32.whl";
+const loadedOptionalPackages = new Set();
 let activeRequestId = null;
 
 async function initializePyodide() {
+  self.postMessage({ type: "status", message: "Loading Python runtime" });
   const pyodide = await loadPyodide();
-  await pyodide.loadPackage(["micropip", "pydantic", "pygments"]);
-  pyodide.globals.set(
-    "__kedi_monty_wheel_url",
-    new URL(MONTY_WHEEL, self.location.origin).href,
-  );
+  self.postMessage({ type: "status", message: "Loading Pydantic" });
+  await pyodide.loadPackage(["micropip", "pydantic"]);
+  return pyodide;
+}
+
+async function ensureOptionalPackages(pyodide, request) {
+  const serialized = JSON.stringify(request);
+  if (serialized.includes("pydantic_monty")) {
+    throw new Error(
+      "pydantic_monty is not supported by the Pyodide fallback; use server sandbox execution",
+    );
+  }
+  if (serialized.includes("logfire")) {
+    await installLogfire(pyodide);
+  }
+}
+
+async function installLogfire(pyodide) {
+  if (loadedOptionalPackages.has("logfire")) {
+    return;
+  }
+  self.postMessage({ type: "status", message: "Loading Logfire" });
   await pyodide.runPythonAsync(`
 import micropip
 await micropip.install([
@@ -32,13 +49,10 @@ await micropip.install([
     "opentelemetry-instrumentation==0.62b1",
     "opentelemetry-semantic-conventions==0.62b1",
     "logfire==4.33.0",
-    __kedi_monty_wheel_url,
 ])
-import pydantic_monty
-assert pydantic_monty.Monty("1 + 2").run() == 3
+import logfire
 `);
-  pyodide.globals.delete("__kedi_monty_wheel_url");
-  return pyodide;
+  loadedOptionalPackages.add("logfire");
 }
 
 globalThis.kediStreamOutput = (stream, text) => {
@@ -97,7 +111,7 @@ import typing_extensions
 from js import kediStreamOutput
 from pydantic import BaseModel
 
-_REFERENCE_KEY = "__kedi_pyodide_ref__"
+_REFERENCE_KEY = "__kedi_playground_ref__"
 _OBJECT_REGISTRY = globals().setdefault("__kedi_object_registry", {})
 
 
@@ -116,7 +130,7 @@ def _from_json(value):
             try:
                 return _OBJECT_REGISTRY[handle]
             except KeyError as exc:
-                raise RuntimeError("Pyodide object reference is no longer available") from exc
+                raise RuntimeError("Playground object reference is no longer available") from exc
         return _KediAttrDict({key: _from_json(item) for key, item in value.items()})
     if isinstance(value, list):
         return [_from_json(item) for item in value]
@@ -142,7 +156,7 @@ def _to_json(value):
         raise TypeError(f"Python callable {value!r} requires an opaque bridge reference")
     if isinstance(value, dict):
         if not all(isinstance(key, str) for key in value):
-            raise TypeError("Pyodide mappings require string keys")
+            raise TypeError("Playground mappings require string keys")
         return {key: _to_json(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
         return [_to_json(item) for item in value]
@@ -152,7 +166,7 @@ def _to_json(value):
             for key, item in vars(value).items()
             if not key.startswith("_")
         }
-    raise TypeError(f"Python value {type(value).__name__} cannot cross the Pyodide bridge")
+    raise TypeError(f"Python value {type(value).__name__} cannot cross the playground bridge")
 
 
 def _type_descriptor(value):
@@ -200,7 +214,7 @@ def _type_descriptor(value):
             "origin": origin_descriptor,
             "args": [_type_descriptor(arg) for arg in args],
         }
-    raise TypeError("Python-defined types cannot cross the Pyodide bridge yet")
+    raise TypeError("Python-defined types cannot cross the playground bridge yet")
 
 
 def _run_block(namespace, code, sync_names):
@@ -274,7 +288,7 @@ def _execute_kedi_request(request):
         except TypeError:
             return {"ok": True, "type": _type_descriptor(value), "env": {}}
     else:
-        raise ValueError(f"Unknown Pyodide action: {action!r}")
+        raise ValueError(f"Unknown playground action: {action!r}")
 
     return {
         "ok": True,
@@ -307,6 +321,7 @@ self.addEventListener("message", async (event) => {
   activeRequestId = id;
   try {
     const pyodide = await pyodidePromise;
+    await ensureOptionalPackages(pyodide, request);
     pyodide.setStdin({ stdin: readStdin, isatty: true });
     pyodide.globals.set("__kedi_request_json", JSON.stringify(request));
     const responseJson = await pyodide.runPythonAsync(DRIVER);

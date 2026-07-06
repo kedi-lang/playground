@@ -36,10 +36,14 @@ RUN --mount=type=secret,id=KEDI_GITHUB_TOKEN,required=false \
         exit 2; \
     fi; \
     /opt/venv/bin/python -c \
-        "from kedi.agent_adapter import WebGPUAdapter; from kedi.executors import PyodideExecutor"
+        "import pydantic_monty; from kedi.agent_adapter import WebGPUAdapter; from kedi.executors import NsJailExecutor, PlaygroundExecutor, PyodideExecutor"
 
 
 FROM python:3.12-slim-bookworm
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends nsjail \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid 1000 user
 

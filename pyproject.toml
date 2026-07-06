@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = [
     "kedi[playground]",
+    "pydantic-monty>=0.0.18",
 ]
 
 [project.scripts]

@@ -17,9 +17,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from playground.bridge import BridgeManager
 from playground.execution import execution_error_payload
+from playground.local_runtime import run_webgpu_host
 from playground.models import MODEL_BY_ID, browser_model, public_model_registry
+from playground.nsjail import NsJailPool
 from playground.pyright import PyrightServer
-from playground.worker import run_provider, run_webgpu
+from playground.worker import run_provider
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = PACKAGE_ROOT / "static"
@@ -28,14 +30,19 @@ POLL_SECONDS = 25
 _INTERNAL_BRIDGE_LOCK = threading.Lock()
 _INTERNAL_BRIDGE_TOKENS: dict[str, str] = {}
 PYRIGHT = PyrightServer()
+NSJAIL_POOL = NsJailPool(size=int(os.environ.get("KEDI_NSJAIL_POOL_SIZE", "10")))
 _LONG_LIVED_ASSET_PREFIXES = ("/grammars/", "/vendor/")
 _LONG_LIVED_ASSET_SUFFIXES = {".scm", ".wasm"}
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    yield
-    PYRIGHT.close()
+    await asyncio.to_thread(NSJAIL_POOL.start)
+    try:
+        yield
+    finally:
+        NSJAIL_POOL.close()
+        PYRIGHT.close()
 
 
 app = FastAPI(title="Kedi Playground", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -300,7 +307,7 @@ async def local_run(payload: LocalRunPayload, request: Request) -> JSONResponse:
             supported_models = (*supported_models, payload.model_id)
         with _internal_bridge(payload.run_id, request) as (bridge_url, bridge_token):
             result = await asyncio.to_thread(
-                run_webgpu,
+                run_webgpu_host,
                 source=payload.source,
                 model=payload.model_id,
                 supported_models=supported_models,
@@ -309,6 +316,7 @@ async def local_run(payload: LocalRunPayload, request: Request) -> JSONResponse:
                 run_id=payload.run_id,
                 bridge_url=bridge_url,
                 bridge_token=bridge_token,
+                nsjail_pool=NSJAIL_POOL if NSJAIL_POOL.enabled else None,
             )
         return JSONResponse(result, status_code=200 if result.get("ok") else 400)
     except Exception as exc:  # noqa: BLE001 - API boundary formats Kedi failures.

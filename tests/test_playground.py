@@ -17,7 +17,7 @@ from kedi.errors import KediExecutionError, KediPythonTrace, KediTraceFrame
 from kedi.lang import parse_program
 from kedi.lang.ast import Span
 
-from playground import server, worker, worker_process
+from playground import local_runtime, nsjail, server, worker, worker_process
 from playground.bridge import BridgeCancelled, BridgeManager, BridgeRun
 from playground.execution import (
     execution_error_diagnostic,
@@ -94,7 +94,12 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert '"kedi[playground] @ git+${KEDI_REPOSITORY}@${KEDI_REVISION}"' in dockerfile
     assert "KEDI_INSTALL_MODE must be prod or dev" in dockerfile
     assert "from kedi.agent_adapter import WebGPUAdapter" in dockerfile
-    assert "from kedi.executors import PyodideExecutor" in dockerfile
+    assert (
+        "from kedi.executors import NsJailExecutor, PlaygroundExecutor, PyodideExecutor"
+        in dockerfile
+    )
+    assert "import pydantic_monty" in dockerfile
+    assert "apt-get install --yes --no-install-recommends nsjail" in dockerfile
     assert "USER user" in dockerfile
     assert "PORT=7860" in dockerfile
     assert "PYTHONPATH=/home/user/app/src" in dockerfile
@@ -108,16 +113,152 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert "title: Kedi Playground" in workflow
     assert "colorTo: indigo" in workflow
     assert "app_port: 7860" in workflow
-    assert "build-monty-wheel:" in workflow
-    assert 'MONTY_REVISION: "45a3b2d57e6ce723fed4166fb032242ece74a663"' in workflow
-    assert "ref: ${{ env.MONTY_REVISION }}" in workflow
-    assert "target: wasm32-unknown-emscripten" in workflow
-    assert "Smoke-test wheel in real Pyodide" in workflow
+    assert "build-monty-wheel:" not in workflow
+    assert "MONTY_REVISION" not in workflow
+    assert "wasm32-unknown-emscripten" not in workflow
+    assert "Smoke-test wheel in real Pyodide" not in workflow
     assert 'folder_path=".space"' in workflow
-    assert workflow.count("uses: actions/checkout@v4") == 4
-    assert "needs: [build-monty-wheel, verify]" in workflow
+    assert workflow.count("uses: actions/checkout@v4") == 2
+    assert "needs: verify" in workflow
     assert 'space_sdk="docker"' in workflow
     assert "api.add_space_secret(" in workflow
+
+
+def test_nsjail_command_uses_empty_chroot_readonly_binds_and_nobody_user(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    chroot = tmp_path / "jail-root"
+    monkeypatch.setenv("KEDI_NSJAIL_BIN", "/usr/bin/nsjail")
+    monkeypatch.setenv("KEDI_NSJAIL_CHROOT", str(chroot))
+
+    command = nsjail.nsjail_command()
+    readonly_targets = [command[index + 1] for index, item in enumerate(command) if item == "-R"]
+
+    assert command[: command.index("--")] == [
+        "/usr/bin/nsjail",
+        "-Mo",
+        "--quiet",
+        "--chroot",
+        str(chroot),
+        "--cwd",
+        "/tmp",
+        "--disable_proc",
+        "--user",
+        "65534:65534:1",
+        "--group",
+        "65534:65534:1",
+        "--time_limit",
+        "300",
+        "--rlimit_as",
+        "512",
+        "--rlimit_cpu",
+        "60",
+        "--rlimit_fsize",
+        "16",
+        "--rlimit_nofile",
+        "128",
+        "--tmpfsmount",
+        "/tmp",
+        *sum((["-R", path] for path in readonly_targets), []),
+    ]
+    assert chroot.is_dir()
+    assert "/" not in readonly_targets
+    assert str(Path.home()) not in readonly_targets
+    assert str(nsjail.PLAYGROUND_ROOT / "src") in readonly_targets
+    assert command[command.index("--") + 1] == sys.executable
+    assert command[-1].endswith("sandbox_worker.py")
+
+
+def test_nsjail_pool_can_be_disabled_without_falling_back_to_host_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = nsjail.NsJailPool()
+
+    monkeypatch.setenv("KEDI_NSJAIL_ENABLED", "0")
+    pool.start()
+
+    assert pool.enabled is False
+    assert pool.last_error == "NsJail disabled by KEDI_NSJAIL_ENABLED"
+
+
+def test_nsjail_worker_environment_is_minimal_and_secret_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", "/home/user")
+    monkeypatch.setenv("PATH", "/opt/venv/bin:/usr/bin")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setenv("LOGFIRE_TOKEN", "secret")
+
+    env = nsjail.worker_environment()
+
+    assert env["HOME"] == "/tmp"
+    assert env["PATH"] == "/opt/venv/bin:/usr/bin"
+    assert "OPENAI_API_KEY" not in env
+    assert "LOGFIRE_TOKEN" not in env
+
+
+def test_local_runtime_rejects_native_sandbox_requirements_without_nsjail() -> None:
+    assert local_runtime._requires_native_sandbox("> import: sandbox\n= ok")
+    assert local_runtime._requires_native_sandbox("```\nimport pydantic_monty\n```")
+    assert not local_runtime._requires_native_sandbox("> import: this\n= ok")
+
+
+def test_local_runtime_python_bridge_lazily_uses_nsjail_or_browser_fallback() -> None:
+    class Worker:
+        def request(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+            return {"ok": True, "backend": "nsjail", "payload": payload, "timeout": timeout}
+
+    class Lease:
+        def __init__(self, worker: Worker | None) -> None:
+            self.worker = worker
+            self.closed = False
+
+        def __enter__(self) -> Worker | None:
+            return self.worker
+
+        def __exit__(self, *_: Any) -> None:
+            self.closed = True
+
+    class Pool:
+        def __init__(self, worker: Worker | None) -> None:
+            self.lease_context = Lease(worker)
+            self.leases = 0
+
+        def lease(self) -> Lease:
+            self.leases += 1
+            return self.lease_context
+
+    class BrowserBridge:
+        def request(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+            return {"ok": True, "backend": "browser", "payload": payload, "timeout": timeout}
+
+    pool_with_worker = Pool(Worker())
+    bridge = local_runtime._RunPythonBridge(
+        browser_bridge=BrowserBridge(),  # type: ignore[arg-type]
+        nsjail_pool=pool_with_worker,  # type: ignore[arg-type]
+        requires_native_sandbox=False,
+    )
+    assert pool_with_worker.leases == 0
+    assert bridge.request({"action": "evaluate_inline"}, timeout=1)["backend"] == "nsjail"
+    bridge.close()
+    assert pool_with_worker.lease_context.closed
+
+    pool_without_worker = Pool(None)
+    fallback = local_runtime._RunPythonBridge(
+        browser_bridge=BrowserBridge(),  # type: ignore[arg-type]
+        nsjail_pool=pool_without_worker,  # type: ignore[arg-type]
+        requires_native_sandbox=False,
+    )
+    assert fallback.request({"action": "evaluate_inline"}, timeout=1)["backend"] == "browser"
+
+    native = local_runtime._RunPythonBridge(
+        browser_bridge=BrowserBridge(),  # type: ignore[arg-type]
+        nsjail_pool=Pool(None),  # type: ignore[arg-type]
+        requires_native_sandbox=True,
+    )
+    with pytest.raises(RuntimeError, match="Pyodide fallback"):
+        native.request({"action": "evaluate_inline"}, timeout=1)
 
 
 def test_tutorial_examples_are_parseable_and_tool_usage_stays_focused() -> None:
@@ -585,7 +726,7 @@ def test_local_run_returns_http_error_for_worker_failure(
 ) -> None:
     monkeypatch.setattr(
         server,
-        "run_webgpu",
+        "run_webgpu_host",
         lambda **_: {
             "ok": False,
             "error": "KediNameError: Unknown variable: country",
@@ -961,13 +1102,17 @@ def test_model_downloads_are_browser_owned() -> None:
     assert '"__name__": "__kedi_pyodide__"' in worker_source
     assert "pyodide.setStdin({ stdin: readStdin, isatty: true })" in worker_source
     assert "pyodide/v314.0.2/full/pyodide.mjs" in worker_source
-    assert 'pyodide.loadPackage(["micropip", "pydantic", "pygments"])' in worker_source
+    assert 'pyodide.loadPackage(["micropip", "pydantic"])' in worker_source
     assert '"protobuf==6.33.5"' in worker_source
-    assert (
-        "/vendor/pydantic_monty-0.0.18-cp314-cp314-pyemscripten_2026_0_wasm32.whl" in worker_source
+    assert 'serialized.includes("pydantic_monty")' in worker_source
+    assert 'serialized.includes("logfire")' in worker_source
+    assert 'self.postMessage({ type: "status", message: "Loading Python runtime" })' in (
+        worker_source
     )
-    assert "import pydantic_monty" in worker_source
-    assert 'pydantic_monty.Monty("1 + 2").run() == 3' in worker_source
+    assert "Loading Monty sandbox" not in worker_source
+    assert "pydantic_monty is not supported by the Pyodide fallback" in worker_source
+    assert "import pydantic_monty" not in worker_source
+    assert 'pydantic_monty.Monty("1 + 2").run() == 3' not in worker_source
     assert '"opentelemetry-api==1.41.1"' in worker_source
     assert '"opentelemetry-semantic-conventions==0.62b1"' in worker_source
     assert '"logfire==4.33.0"' in worker_source
@@ -982,6 +1127,7 @@ def test_model_downloads_are_browser_owned() -> None:
     assert 'new Worker("/pyodide-worker.js"' in pyodide_runtime_source
     assert 'event.data?.type === "ready"' in pyodide_runtime_source
     assert 'event.data?.type === "ready_error"' in pyodide_runtime_source
+    assert 'event.data?.type === "status"' in pyodide_runtime_source
     assert "await this.preload()" in pyodide_runtime_source
     assert "this.executionQueue.then(() => this.#execute(request))" in pyodide_runtime_source
     assert 'self.postMessage({ type: "ready" })' in worker_source
