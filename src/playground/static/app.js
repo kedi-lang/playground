@@ -292,6 +292,7 @@ async function run() {
 }
 
 async function runLocal() {
+  const source = sourceEditor.getValue();
   const modelId = ui.model.value;
   const baseConfig = browserModelConfig(modelId);
   const config = selectedRuntimeConfig(baseConfig);
@@ -312,17 +313,19 @@ async function runLocal() {
     setStatus,
     browserIo(),
     pythonRuntime,
-    async (signal) => {
-      await assertWebGPU();
-      const runtime = await runtimeFor(config);
-      setStatus("Loading model");
-      await runtime.load(config, renderProgress, signal);
-      if (config.source === "cache") {
-        setDownloadState(true);
-      }
-      setProgress("Model loaded");
-      return runtime;
-    },
+    sourceDefinitelyDoesNotNeedModel(source)
+      ? null
+      : async (signal) => {
+          await assertWebGPU();
+          const runtime = await runtimeFor(config);
+          setStatus("Loading model");
+          await runtime.load(config, renderProgress, signal);
+          if (config.source === "cache") {
+            setDownloadState(true);
+          }
+          setProgress("Model loaded");
+          return runtime;
+        },
   );
   const bridge = client.serve(runId, controller.signal);
   activeRun.bridgeStarted = true;
@@ -331,7 +334,7 @@ async function runLocal() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        source: sourceEditor.getValue(),
+        source,
         modelId,
         modelConfig: MODEL_REGISTRY[modelId] ? null : baseConfig,
         runId,
@@ -387,6 +390,23 @@ async function runByok() {
   } finally {
     controller.abort();
   }
+}
+
+function sourceDefinitelyDoesNotNeedModel(source) {
+  const meaningfulLines = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+  if (!meaningfulLines.length) {
+    return true;
+  }
+  if (meaningfulLines.some((line) => line.startsWith(">>") || line.includes("["))) {
+    return false;
+  }
+  const importLines = meaningfulLines.filter((line) => line.startsWith("> import:"));
+  return importLines.every((line) =>
+    /^>\s*import:\s*(this|errors|require)\s*$/.test(line),
+  );
 }
 
 function validateLogfireEnvironment(values) {

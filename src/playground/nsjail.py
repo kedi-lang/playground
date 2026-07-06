@@ -191,8 +191,8 @@ class NsJailPool:
         threading.Thread(target=target, daemon=True).start()
 
     def _new_worker(self) -> NsJailWorker:
-        command = nsjail_command()
         env = worker_environment()
+        command = nsjail_command(env)
         return NsJailWorker(command, env=env)
 
     def _self_test(self, worker: NsJailWorker) -> None:
@@ -211,10 +211,11 @@ class NsJailPool:
             raise NsJailUnavailable(f"NsJail self-test failed: {response!r}")
 
 
-def nsjail_command() -> list[str]:
+def nsjail_command(env: Mapping[str, str] | None = None) -> list[str]:
     executable = os.environ.get("KEDI_NSJAIL_BIN") or shutil.which("nsjail")
     if not executable:
         raise NsJailUnavailable("nsjail executable was not found")
+    child_env = worker_environment() if env is None else dict(env)
 
     command = [
         executable,
@@ -229,6 +230,7 @@ def nsjail_command() -> list[str]:
         _NOBODY_MAP,
         "--group",
         _NOBODY_MAP,
+        *_env_args(child_env),
         "--time_limit",
         os.environ.get("KEDI_NSJAIL_TIME_LIMIT", "300"),
         "--rlimit_as",
@@ -249,6 +251,13 @@ def nsjail_command() -> list[str]:
             command.extend(["-R", path])
     command.extend(["--", sys.executable, str(Path(sandbox_worker.__file__).resolve())])
     return command
+
+
+def _env_args(env: Mapping[str, str]) -> list[str]:
+    args: list[str] = []
+    for name, value in sorted(env.items()):
+        args.extend(["--env", f"{name}={value}"])
+    return args
 
 
 def sandbox_root() -> str:
@@ -285,7 +294,10 @@ def readonly_mounts() -> list[str]:
 
 
 def worker_environment() -> dict[str, str]:
-    env: dict[str, str] = {"HOME": "/tmp"}
+    env: dict[str, str] = {
+        "HOME": "/tmp",
+        "LD_LIBRARY_PATH": "/usr/local/lib:/usr/lib:/lib",
+    }
     for name in ("LANG", "LC_ALL", "PATH", "PYTHONPATH", "SSL_CERT_DIR", "SSL_CERT_FILE"):
         value = os.environ.get(name)
         if value:

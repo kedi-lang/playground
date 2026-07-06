@@ -106,7 +106,10 @@ RUN set -eux; \
     cp -a /opt/venv "$KEDI_NSJAIL_CHROOT/opt/venv"; \
     cp -a /usr/lib "$KEDI_NSJAIL_CHROOT/usr/lib"; \
     cp -a /usr/local "$KEDI_NSJAIL_CHROOT/usr/local"; \
-    chmod 1777 "$KEDI_NSJAIL_CHROOT/tmp"
+    chmod 1777 "$KEDI_NSJAIL_CHROOT/tmp"; \
+    LD_LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib \
+        chroot "$KEDI_NSJAIL_CHROOT" \
+        /opt/venv/bin/python -c "import playground.sandbox_worker"
 
 USER user
 

@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 from kedi.errors import KediExecutionError, KediPythonTrace, KediTraceFrame
-from kedi.lang import parse_program
+from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import Span
 
 from playground import local_runtime, nsjail, server, worker, worker_process
@@ -76,6 +76,30 @@ def test_model_registry_is_public_and_rejects_unknown_model() -> None:
         browser_model("missing")
 
 
+def test_webgpu_adapter_is_not_called_for_llm_free_programs() -> None:
+    from kedi.agent_adapter.webgpu import WebGPUAdapter
+
+    class RecordingBridge:
+        def __init__(self) -> None:
+            self.requests: list[dict[str, Any]] = []
+
+        def request(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+            self.requests.append(dict(payload))
+            raise AssertionError(f"unexpected browser model request: {payload!r}")
+
+    for source in ("= ok", ">> hello\n= ok"):
+        bridge = RecordingBridge()
+        adapter = WebGPUAdapter(
+            bridge,
+            model="bonsai-1.7b-q1",
+            supported_models=("bonsai-1.7b-q1",),
+        )
+        runtime = compile_program(parse_program(source, source_path="<test>"), adapter=adapter)
+
+        assert runtime.run_main() == "ok"
+        assert bridge.requests == []
+
+
 def test_health_endpoint_and_space_container_configuration() -> None:
     response = server.healthz()
     playground_root = Path(server.__file__).resolve().parents[2]
@@ -110,6 +134,9 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert "chmod 4755 /usr/local/bin/nsjail" in dockerfile
     assert 'cp -a /opt/venv "$KEDI_NSJAIL_CHROOT/opt/venv"' in dockerfile
     assert 'cp -a /home/user/app/src "$KEDI_NSJAIL_CHROOT/home/user/app/src"' in dockerfile
+    assert "LD_LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib" in dockerfile
+    assert 'chroot "$KEDI_NSJAIL_CHROOT"' in dockerfile
+    assert "import playground.sandbox_worker" in dockerfile
     assert "libnl-route-3-200" in dockerfile
     assert "libprotobuf32" in dockerfile
     assert "USER user" in dockerfile
@@ -146,6 +173,7 @@ def test_nsjail_command_uses_empty_chroot_readonly_binds_and_nobody_user(
 
     command = nsjail.nsjail_command()
     readonly_targets = [command[index + 1] for index, item in enumerate(command) if item == "-R"]
+    env_args = _nsjail_env_args()
 
     assert command[: command.index("--")] == [
         "/usr/bin/nsjail",
@@ -160,6 +188,7 @@ def test_nsjail_command_uses_empty_chroot_readonly_binds_and_nobody_user(
         "65534:65534:1",
         "--group",
         "65534:65534:1",
+        *env_args,
         "--time_limit",
         "300",
         "--rlimit_as",
@@ -194,6 +223,7 @@ def test_nsjail_static_chroot_mode_avoids_namespace_clone_and_bind_mounts(
     monkeypatch.setenv("KEDI_NSJAIL_STATIC_CHROOT", "1")
 
     command = nsjail.nsjail_command()
+    env_args = _nsjail_env_args()
 
     assert command[: command.index("--")] == [
         "/usr/bin/nsjail",
@@ -208,6 +238,7 @@ def test_nsjail_static_chroot_mode_avoids_namespace_clone_and_bind_mounts(
         "65534:65534:1",
         "--group",
         "65534:65534:1",
+        *env_args,
         "--time_limit",
         "300",
         "--rlimit_as",
@@ -230,6 +261,13 @@ def test_nsjail_static_chroot_mode_avoids_namespace_clone_and_bind_mounts(
     ]
     assert "-R" not in command
     assert "--tmpfsmount" not in command
+
+
+def _nsjail_env_args() -> list[str]:
+    args: list[str] = []
+    for name, value in sorted(nsjail.worker_environment().items()):
+        args.extend(["--env", f"{name}={value}"])
+    return args
 
 
 def test_nsjail_pool_can_be_disabled_without_falling_back_to_host_execution(
@@ -256,6 +294,7 @@ def test_nsjail_worker_environment_is_minimal_and_secret_free(
 
     assert env["HOME"] == "/tmp"
     assert env["PATH"] == "/opt/venv/bin:/usr/bin"
+    assert env["LD_LIBRARY_PATH"] == "/usr/local/lib:/usr/lib:/lib"
     assert "OPENAI_API_KEY" not in env
     assert "LOGFIRE_TOKEN" not in env
 
@@ -1200,11 +1239,12 @@ def test_model_downloads_are_browser_owned() -> None:
     assert "pythonRuntime.preload()" in app_source
     assert "requestIdleCallback(preload" in app_source
     assert "browserIo(), pythonRuntime" in app_source
-    lazy_model_load = (
-        'setStatus("Loading model");\n      await runtime.load(config, renderProgress, signal);'
-    )
-    assert lazy_model_load in app_source
+    assert 'setStatus("Loading model");' in app_source
+    assert "await runtime.load(config, renderProgress, signal);" in app_source
     assert 'setStatus("Loading model");\n  await runtime.load(config' not in app_source
+    assert "sourceDefinitelyDoesNotNeedModel(source)" in app_source
+    assert "const source = sourceEditor.getValue();" in app_source
+    assert "this|errors|require" in app_source
     assert "async modelRuntime(signal)" in adapter_source
     assert "this.runtime = await this.loadRuntime(signal)" in adapter_source
     assert "this.python.dispose()" not in adapter_source
