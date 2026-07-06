@@ -1,10 +1,11 @@
 import { PyodideRuntime } from "./pyodide-runtime.js";
 
 export class AdapterClient {
-  constructor(runtime, onStatus, io = {}, python = null) {
+  constructor(runtime, onStatus, io = {}, python = null, loadRuntime = null) {
     this.runtime = runtime;
     this.onStatus = onStatus;
     this.python = python ?? new PyodideRuntime(onStatus, io);
+    this.loadRuntime = loadRuntime;
   }
 
   async serve(runId, signal) {
@@ -25,12 +26,12 @@ export class AdapterClient {
         return;
       }
       if (payload.request) {
-        await this.handle(runId, payload.request);
+        await this.handle(runId, payload.request, signal);
       }
     }
   }
 
-  async handle(runId, request) {
+  async handle(runId, request, signal) {
     if (request.operation === "python") {
       this.onStatus("Running Python sandbox");
       try {
@@ -44,7 +45,8 @@ export class AdapterClient {
       }
       return;
     }
-    if (!this.runtime) {
+    const runtime = await this.modelRuntime(signal);
+    if (!runtime) {
       await postResponse(runId, request.id, {
         kind: "error",
         error: "This run has no browser model runtime",
@@ -55,7 +57,7 @@ export class AdapterClient {
     const messages = browserMessages(request);
     try {
       const generation = normalizeGeneration(
-        await this.runtime.generate({
+        await runtime.generate({
           messages,
           settings: request.settings,
           responseFormat:
@@ -93,6 +95,14 @@ export class AdapterClient {
         },
       });
     }
+  }
+
+  async modelRuntime(signal) {
+    if (this.runtime || !this.loadRuntime) {
+      return this.runtime;
+    }
+    this.runtime = await this.loadRuntime(signal);
+    return this.runtime;
   }
 }
 

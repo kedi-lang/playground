@@ -105,6 +105,11 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert "make -C /tmp/nsjail" in dockerfile
     assert "COPY --from=nsjail-builder /tmp/nsjail/nsjail /usr/local/bin/nsjail" in dockerfile
     assert "RUN nsjail --help >/dev/null" in dockerfile
+    assert "KEDI_NSJAIL_CHROOT=/opt/kedi-jail-root" in dockerfile
+    assert "KEDI_NSJAIL_STATIC_CHROOT=1" in dockerfile
+    assert "chmod 4755 /usr/local/bin/nsjail" in dockerfile
+    assert 'cp -a /opt/venv "$KEDI_NSJAIL_CHROOT/opt/venv"' in dockerfile
+    assert 'cp -a /home/user/app/src "$KEDI_NSJAIL_CHROOT/home/user/app/src"' in dockerfile
     assert "libnl-route-3-200" in dockerfile
     assert "libprotobuf32" in dockerfile
     assert "USER user" in dockerfile
@@ -151,7 +156,6 @@ def test_nsjail_command_uses_empty_chroot_readonly_binds_and_nobody_user(
         "--cwd",
         "/tmp",
         "--disable_proc",
-        "--disable_clone_newcgroup",
         "--user",
         "65534:65534:1",
         "--group",
@@ -166,6 +170,7 @@ def test_nsjail_command_uses_empty_chroot_readonly_binds_and_nobody_user(
         "16",
         "--rlimit_nofile",
         "128",
+        "--disable_clone_newcgroup",
         "--tmpfsmount",
         "/tmp",
         *sum((["-R", path] for path in readonly_targets), []),
@@ -176,6 +181,55 @@ def test_nsjail_command_uses_empty_chroot_readonly_binds_and_nobody_user(
     assert str(nsjail.PLAYGROUND_ROOT / "src") in readonly_targets
     assert command[command.index("--") + 1] == sys.executable
     assert command[-1].endswith("sandbox_worker.py")
+
+
+def test_nsjail_static_chroot_mode_avoids_namespace_clone_and_bind_mounts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    chroot = tmp_path / "static-jail-root"
+    chroot.mkdir()
+    monkeypatch.setenv("KEDI_NSJAIL_BIN", "/usr/bin/nsjail")
+    monkeypatch.setenv("KEDI_NSJAIL_CHROOT", str(chroot))
+    monkeypatch.setenv("KEDI_NSJAIL_STATIC_CHROOT", "1")
+
+    command = nsjail.nsjail_command()
+
+    assert command[: command.index("--")] == [
+        "/usr/bin/nsjail",
+        "-Mo",
+        "--quiet",
+        "--chroot",
+        str(chroot),
+        "--cwd",
+        "/tmp",
+        "--disable_proc",
+        "--user",
+        "65534:65534:1",
+        "--group",
+        "65534:65534:1",
+        "--time_limit",
+        "300",
+        "--rlimit_as",
+        "512",
+        "--rlimit_cpu",
+        "60",
+        "--rlimit_fsize",
+        "16",
+        "--rlimit_nofile",
+        "128",
+        "--disable_clone_newnet",
+        "--disable_clone_newuser",
+        "--disable_clone_newns",
+        "--disable_clone_newpid",
+        "--disable_clone_newipc",
+        "--disable_clone_newuts",
+        "--disable_clone_newcgroup",
+        "--seccomp_string",
+        nsjail._NETWORK_DENY_SECCOMP,
+    ]
+    assert "-R" not in command
+    assert "--tmpfsmount" not in command
 
 
 def test_nsjail_pool_can_be_disabled_without_falling_back_to_host_execution(
@@ -1146,6 +1200,13 @@ def test_model_downloads_are_browser_owned() -> None:
     assert "pythonRuntime.preload()" in app_source
     assert "requestIdleCallback(preload" in app_source
     assert "browserIo(), pythonRuntime" in app_source
+    lazy_model_load = (
+        'setStatus("Loading model");\n      await runtime.load(config, renderProgress, signal);'
+    )
+    assert lazy_model_load in app_source
+    assert 'setStatus("Loading model");\n  await runtime.load(config' not in app_source
+    assert "async modelRuntime(signal)" in adapter_source
+    assert "this.runtime = await this.loadRuntime(signal)" in adapter_source
     assert "this.python.dispose()" not in adapter_source
     assert 'id="stdin-form"' in index_source
     assert 'id="stdin-input"' in index_source

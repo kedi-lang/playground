@@ -21,6 +21,21 @@ DEFAULT_POOL_SIZE = 10
 DEFAULT_TIMEOUT = 60.0
 _NOBODY_MAP = "65534:65534:1"
 _DEFAULT_CHROOT = "/tmp/kedi-nsjail-root"
+_NETWORK_DENY_SECCOMP = (
+    "ERRNO(1) { "
+    "socket, socketpair, connect, accept, accept4, bind, listen, "
+    "getsockname, getpeername, sendto, recvfrom, sendmsg, recvmsg, shutdown "
+    "} DEFAULT ALLOW"
+)
+_NAMESPACE_DISABLE_FLAGS = [
+    "--disable_clone_newnet",
+    "--disable_clone_newuser",
+    "--disable_clone_newns",
+    "--disable_clone_newpid",
+    "--disable_clone_newipc",
+    "--disable_clone_newuts",
+    "--disable_clone_newcgroup",
+]
 
 
 class NsJailUnavailable(RuntimeError):
@@ -210,7 +225,6 @@ def nsjail_command() -> list[str]:
         "--cwd",
         "/tmp",
         "--disable_proc",
-        "--disable_clone_newcgroup",
         "--user",
         _NOBODY_MAP,
         "--group",
@@ -225,19 +239,35 @@ def nsjail_command() -> list[str]:
         os.environ.get("KEDI_NSJAIL_RLIMIT_FSIZE", "16"),
         "--rlimit_nofile",
         os.environ.get("KEDI_NSJAIL_RLIMIT_NOFILE", "128"),
-        "--tmpfsmount",
-        "/tmp",
     ]
-    for path in readonly_mounts():
-        command.extend(["-R", path])
+    if static_chroot_mode():
+        command.extend(_NAMESPACE_DISABLE_FLAGS)
+        command.extend(["--seccomp_string", _NETWORK_DENY_SECCOMP])
+    else:
+        command.extend(["--disable_clone_newcgroup", "--tmpfsmount", "/tmp"])
+        for path in readonly_mounts():
+            command.extend(["-R", path])
     command.extend(["--", sys.executable, str(Path(sandbox_worker.__file__).resolve())])
     return command
 
 
 def sandbox_root() -> str:
     root = Path(os.environ.get("KEDI_NSJAIL_CHROOT", _DEFAULT_CHROOT))
+    if static_chroot_mode():
+        if not root.is_dir():
+            raise NsJailUnavailable(f"Static NsJail root does not exist: {root}")
+        return str(root)
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     return str(root)
+
+
+def static_chroot_mode() -> bool:
+    return os.environ.get("KEDI_NSJAIL_STATIC_CHROOT", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def readonly_mounts() -> list[str]:
@@ -278,5 +308,6 @@ __all__ = [
     "NsJailWorker",
     "nsjail_command",
     "readonly_mounts",
+    "static_chroot_mode",
     "worker_environment",
 ]

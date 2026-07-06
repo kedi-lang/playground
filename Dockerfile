@@ -78,6 +78,8 @@ RUN nsjail --help >/dev/null
 RUN useradd --create-home --uid 1000 user
 
 ENV HOST=0.0.0.0 \
+    KEDI_NSJAIL_CHROOT=/opt/kedi-jail-root \
+    KEDI_NSJAIL_STATIC_CHROOT=1 \
     PATH=/opt/venv/bin:$PATH \
     PORT=7860 \
     PYTHONPATH=/home/user/app/src \
@@ -87,6 +89,24 @@ WORKDIR /home/user/app
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=user:user src ./src
+
+RUN set -eux; \
+    chmod 4755 /usr/local/bin/nsjail; \
+    mkdir -p \
+        "$KEDI_NSJAIL_CHROOT/etc" \
+        "$KEDI_NSJAIL_CHROOT/home/user/app" \
+        "$KEDI_NSJAIL_CHROOT/lib" \
+        "$KEDI_NSJAIL_CHROOT/opt" \
+        "$KEDI_NSJAIL_CHROOT/tmp" \
+        "$KEDI_NSJAIL_CHROOT/usr"; \
+    cp -a /etc/ssl "$KEDI_NSJAIL_CHROOT/etc/ssl"; \
+    cp -a /home/user/app/src "$KEDI_NSJAIL_CHROOT/home/user/app/src"; \
+    cp -a /lib/. "$KEDI_NSJAIL_CHROOT/lib/"; \
+    if [ -e /lib64 ]; then cp -aL /lib64 "$KEDI_NSJAIL_CHROOT/lib64"; fi; \
+    cp -a /opt/venv "$KEDI_NSJAIL_CHROOT/opt/venv"; \
+    cp -a /usr/lib "$KEDI_NSJAIL_CHROOT/usr/lib"; \
+    cp -a /usr/local "$KEDI_NSJAIL_CHROOT/usr/local"; \
+    chmod 1777 "$KEDI_NSJAIL_CHROOT/tmp"
 
 USER user
 

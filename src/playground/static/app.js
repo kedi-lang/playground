@@ -292,11 +292,9 @@ async function run() {
 }
 
 async function runLocal() {
-  await assertWebGPU();
   const modelId = ui.model.value;
   const baseConfig = browserModelConfig(modelId);
   const config = selectedRuntimeConfig(baseConfig);
-  const runtime = await runtimeFor(config);
   const values = envValues();
   validateLogfireEnvironment(values);
   const secrets = Object.fromEntries(
@@ -307,15 +305,25 @@ async function runLocal() {
   const runId = crypto.randomUUID();
   const controller = new AbortController();
   activeRun = { runId, controller, bridgeStarted: false };
-  setStatus("Loading model");
-  await runtime.load(config, renderProgress, controller.signal);
-  if (config.source === "cache") {
-    setDownloadState(true);
-  }
-  setProgress("Model loaded");
   setStatus("Running Kedi");
 
-  const client = new AdapterClient(runtime, setStatus, browserIo(), pythonRuntime);
+  const client = new AdapterClient(
+    null,
+    setStatus,
+    browserIo(),
+    pythonRuntime,
+    async (signal) => {
+      await assertWebGPU();
+      const runtime = await runtimeFor(config);
+      setStatus("Loading model");
+      await runtime.load(config, renderProgress, signal);
+      if (config.source === "cache") {
+        setDownloadState(true);
+      }
+      setProgress("Model loaded");
+      return runtime;
+    },
+  );
   const bridge = client.serve(runId, controller.signal);
   activeRun.bridgeStarted = true;
   try {
