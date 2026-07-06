@@ -210,6 +210,7 @@ def nsjail_command() -> list[str]:
         "--cwd",
         "/tmp",
         "--disable_proc",
+        "--disable_clone_newcgroup",
         "--user",
         _NOBODY_MAP,
         "--group",

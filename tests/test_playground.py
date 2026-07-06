@@ -151,6 +151,7 @@ def test_nsjail_command_uses_empty_chroot_readonly_binds_and_nobody_user(
         "--cwd",
         "/tmp",
         "--disable_proc",
+        "--disable_clone_newcgroup",
         "--user",
         "65534:65534:1",
         "--group",
