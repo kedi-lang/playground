@@ -73,6 +73,8 @@ RUN apt-get update \
 
 COPY --from=nsjail-builder /tmp/nsjail/nsjail /usr/local/bin/nsjail
 
+RUN nsjail --help >/dev/null
+
 RUN useradd --create-home --uid 1000 user
 
 ENV HOST=0.0.0.0 \

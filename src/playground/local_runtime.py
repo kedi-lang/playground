@@ -134,7 +134,9 @@ class _RunPythonBridge:
         self._worker = None
 
     def _select_backend(self) -> None:
+        last_error = None
         if self._pool is not None:
+            last_error = self._pool.last_error
             lease_context = self._pool.lease()
             worker = lease_context.__enter__()
             if worker is not None:
@@ -142,10 +144,12 @@ class _RunPythonBridge:
                 self._worker = worker
                 return
             lease_context.__exit__(None, None, None)
+            last_error = self._pool.last_error or last_error
         if self._requires_native_sandbox:
+            detail = f": {last_error}" if last_error else ""
             raise RuntimeError(
                 "pydantic_monty is not supported by the Pyodide fallback; "
-                "server sandbox execution is unavailable"
+                f"server sandbox execution is unavailable{detail}"
             )
         self._fallback_to_browser = True
 

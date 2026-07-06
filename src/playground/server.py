@@ -171,8 +171,14 @@ class InternalBridgePayload(_CamelPayload):
 
 
 @app.get("/api/health")
-async def health() -> dict[str, bool]:
-    return {"ok": True}
+async def health() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "nsjail": {
+            "enabled": NSJAIL_POOL.enabled,
+            "lastError": NSJAIL_POOL.last_error,
+        },
+    }
 
 
 @app.get("/api/models")
@@ -316,7 +322,7 @@ async def local_run(payload: LocalRunPayload, request: Request) -> JSONResponse:
                 run_id=payload.run_id,
                 bridge_url=bridge_url,
                 bridge_token=bridge_token,
-                nsjail_pool=NSJAIL_POOL if NSJAIL_POOL.enabled else None,
+                nsjail_pool=NSJAIL_POOL,
             )
         return JSONResponse(result, status_code=200 if result.get("ok") else 400)
     except Exception as exc:  # noqa: BLE001 - API boundary formats Kedi failures.

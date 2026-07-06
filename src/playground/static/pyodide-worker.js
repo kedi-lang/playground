@@ -39,6 +39,7 @@ async function installLogfire(pyodide) {
     return;
   }
   self.postMessage({ type: "status", message: "Loading Logfire" });
+  await pyodide.loadPackage("pygments");
   await pyodide.runPythonAsync(`
 import micropip
 await micropip.install([

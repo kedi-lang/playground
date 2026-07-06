@@ -104,6 +104,7 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert 'git clone --depth 1 --branch "$NSJAIL_REVISION"' in dockerfile
     assert "make -C /tmp/nsjail" in dockerfile
     assert "COPY --from=nsjail-builder /tmp/nsjail/nsjail /usr/local/bin/nsjail" in dockerfile
+    assert "RUN nsjail --help >/dev/null" in dockerfile
     assert "libnl-route-3-200" in dockerfile
     assert "libprotobuf32" in dockerfile
     assert "USER user" in dockerfile
@@ -227,9 +228,10 @@ def test_local_runtime_python_bridge_lazily_uses_nsjail_or_browser_fallback() ->
             self.closed = True
 
     class Pool:
-        def __init__(self, worker: Worker | None) -> None:
+        def __init__(self, worker: Worker | None, *, last_error: str | None = None) -> None:
             self.lease_context = Lease(worker)
             self.leases = 0
+            self.last_error = last_error
 
         def lease(self) -> Lease:
             self.leases += 1
@@ -260,10 +262,10 @@ def test_local_runtime_python_bridge_lazily_uses_nsjail_or_browser_fallback() ->
 
     native = local_runtime._RunPythonBridge(
         browser_bridge=BrowserBridge(),  # type: ignore[arg-type]
-        nsjail_pool=Pool(None),  # type: ignore[arg-type]
+        nsjail_pool=Pool(None, last_error="nsjail self-test failed"),  # type: ignore[arg-type]
         requires_native_sandbox=True,
     )
-    with pytest.raises(RuntimeError, match="Pyodide fallback"):
+    with pytest.raises(RuntimeError, match="nsjail self-test failed"):
         native.request({"action": "evaluate_inline"}, timeout=1)
 
 
@@ -1109,6 +1111,7 @@ def test_model_downloads_are_browser_owned() -> None:
     assert "pyodide.setStdin({ stdin: readStdin, isatty: true })" in worker_source
     assert "pyodide/v314.0.2/full/pyodide.mjs" in worker_source
     assert 'pyodide.loadPackage(["micropip", "pydantic"])' in worker_source
+    assert 'pyodide.loadPackage("pygments")' in worker_source
     assert '"protobuf==6.33.5"' in worker_source
     assert 'serialized.includes("pydantic_monty")' in worker_source
     assert 'serialized.includes("logfire")' in worker_source
