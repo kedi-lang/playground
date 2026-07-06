@@ -39,11 +39,39 @@ RUN --mount=type=secret,id=KEDI_GITHUB_TOKEN,required=false \
         "import pydantic_monty; from kedi.agent_adapter import WebGPUAdapter; from kedi.executors import NsJailExecutor, PlaygroundExecutor, PyodideExecutor"
 
 
+FROM python:3.12-slim-bookworm AS nsjail-builder
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        bison \
+        build-essential \
+        ca-certificates \
+        flex \
+        git \
+        libnl-route-3-dev \
+        libprotobuf-dev \
+        pkg-config \
+        protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG NSJAIL_REPOSITORY=https://github.com/google/nsjail.git
+ARG NSJAIL_REVISION=master
+
+RUN git clone --depth 1 --branch "$NSJAIL_REVISION" "$NSJAIL_REPOSITORY" /tmp/nsjail \
+    && make -C /tmp/nsjail \
+    && /tmp/nsjail/nsjail --help >/dev/null
+
+
 FROM python:3.12-slim-bookworm
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends nsjail \
+    && apt-get install --yes --no-install-recommends \
+        libnl-3-200 \
+        libnl-route-3-200 \
+        libprotobuf32 \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=nsjail-builder /tmp/nsjail/nsjail /usr/local/bin/nsjail
 
 RUN useradd --create-home --uid 1000 user
 

@@ -99,7 +99,13 @@ def test_health_endpoint_and_space_container_configuration() -> None:
         in dockerfile
     )
     assert "import pydantic_monty" in dockerfile
-    assert "apt-get install --yes --no-install-recommends nsjail" in dockerfile
+    assert "FROM python:3.12-slim-bookworm AS nsjail-builder" in dockerfile
+    assert "ARG NSJAIL_REPOSITORY=https://github.com/google/nsjail.git" in dockerfile
+    assert 'git clone --depth 1 --branch "$NSJAIL_REVISION"' in dockerfile
+    assert "make -C /tmp/nsjail" in dockerfile
+    assert "COPY --from=nsjail-builder /tmp/nsjail/nsjail /usr/local/bin/nsjail" in dockerfile
+    assert "libnl-route-3-200" in dockerfile
+    assert "libprotobuf32" in dockerfile
     assert "USER user" in dockerfile
     assert "PORT=7860" in dockerfile
     assert "PYTHONPATH=/home/user/app/src" in dockerfile
