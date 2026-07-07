@@ -149,6 +149,9 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert "`HF_SPACE_ID`" in readme
     assert "`KEDI_GITHUB_TOKEN`" in readme
     assert "Prepare Hugging Face Space metadata" in workflow
+    assert "https://api.github.com/repos/kedi-lang/kedi/commits/stable" in workflow
+    assert 'kedi_revision = json.loads(response.read())["sha"]' in workflow
+    assert "ARG KEDI_REVISION={kedi_revision}" in workflow
     assert "title: Kedi Playground" in workflow
     assert "colorTo: indigo" in workflow
     assert "app_port: 7860" in workflow
@@ -192,7 +195,7 @@ def test_nsjail_command_uses_empty_chroot_readonly_binds_and_nobody_user(
         "--time_limit",
         "300",
         "--rlimit_as",
-        "512",
+        nsjail.DEFAULT_RLIMIT_AS_MB,
         "--rlimit_cpu",
         "60",
         "--rlimit_fsize",
@@ -242,7 +245,7 @@ def test_nsjail_static_chroot_mode_avoids_namespace_clone_and_bind_mounts(
         "--time_limit",
         "300",
         "--rlimit_as",
-        "512",
+        nsjail.DEFAULT_RLIMIT_AS_MB,
         "--rlimit_cpu",
         "60",
         "--rlimit_fsize",

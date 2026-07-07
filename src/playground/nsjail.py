@@ -19,6 +19,7 @@ PLAYGROUND_ROOT = PACKAGE_ROOT.parents[1]
 
 DEFAULT_POOL_SIZE = 10
 DEFAULT_TIMEOUT = 60.0
+DEFAULT_RLIMIT_AS_MB = "2048"
 _NOBODY_MAP = "65534:65534:1"
 _DEFAULT_CHROOT = "/tmp/kedi-nsjail-root"
 _NETWORK_DENY_SECCOMP = (
@@ -234,7 +235,7 @@ def nsjail_command(env: Mapping[str, str] | None = None) -> list[str]:
         "--time_limit",
         os.environ.get("KEDI_NSJAIL_TIME_LIMIT", "300"),
         "--rlimit_as",
-        os.environ.get("KEDI_NSJAIL_RLIMIT_AS", "512"),
+        os.environ.get("KEDI_NSJAIL_RLIMIT_AS", DEFAULT_RLIMIT_AS_MB),
         "--rlimit_cpu",
         os.environ.get("KEDI_NSJAIL_RLIMIT_CPU", "60"),
         "--rlimit_fsize",

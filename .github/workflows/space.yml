@@ -122,14 +122,36 @@ jobs:
           PYTHON_EOF
 
       - name: Prepare Hugging Face Space metadata
+        env:
+          KEDI_GITHUB_TOKEN: ${{ secrets.KEDI_GITHUB_TOKEN }}
         run: |
           python << 'PYTHON_EOF'
+          import json
+          import os
           import shutil
+          import urllib.request
           from pathlib import Path
+
+          token = os.environ["KEDI_GITHUB_TOKEN"]
+          request = urllib.request.Request(
+              "https://api.github.com/repos/kedi-lang/kedi/commits/stable",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              kedi_revision = json.loads(response.read())["sha"]
 
           target = Path(".space")
           target.mkdir()
-          shutil.copy2("Dockerfile", target / "Dockerfile")
+          dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+          dockerfile = dockerfile.replace(
+              "ARG KEDI_REVISION=stable",
+              f"ARG KEDI_REVISION={kedi_revision}",
+          )
+          (target / "Dockerfile").write_text(dockerfile, encoding="utf-8")
           shutil.copy2("LICENSE", target / "LICENSE")
           shutil.copytree("src", target / "src")
 
