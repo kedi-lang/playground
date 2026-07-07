@@ -144,8 +144,7 @@ class NsJailWorker:
             if not isinstance(response, dict):
                 self.close()
                 raise RuntimeError(
-                    "NsJail worker returned a malformed response"
-                    f"{_protocol_noise_suffix(noise)}"
+                    f"NsJail worker returned a malformed response{_protocol_noise_suffix(noise)}"
                 )
             return response
 

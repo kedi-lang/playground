@@ -386,9 +386,7 @@ def test_nsjail_worker_ignores_protocol_noise_before_marked_response(
     class Process:
         stdin = Stdin()
         stdout = io.StringIO(
-            "null\n"
-            '"native stdout noise"\n'
-            f'{nsjail.RESPONSE_PREFIX}{{"ok":true,"result":"done"}}\n'
+            f'null\n"native stdout noise"\n{nsjail.RESPONSE_PREFIX}{{"ok":true,"result":"done"}}\n'
         )
         stderr = io.StringIO()
 
