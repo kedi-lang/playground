@@ -84,9 +84,9 @@ def _run_webgpu_host_in_environment(
     python_runtime: PythonRuntime,
 ) -> dict[str, Any]:
     from kedi.agent_adapter.webgpu import WebGPUAdapter
-    from kedi.executors import PlaygroundExecutor
     from kedi.lang import compile_program, parse_program
 
+    PlaygroundExecutor = _playground_executor_class()
     logfire_enabled = _configure_logfire(instrument_pydantic_ai=False)
     telemetry = (
         WebGPUTelemetry(
@@ -146,10 +146,10 @@ def _run_provider_host_in_environment(
     python_runtime: PythonRuntime,
 ) -> dict[str, Any]:
     from kedi.agent_adapter.adapters import PydanticAdapter
-    from kedi.executors import PlaygroundExecutor
     from kedi.lang import compile_program, parse_program
     from kedi.model_normalization import normalize_for_pydantic_ai
 
+    PlaygroundExecutor = _playground_executor_class()
     _configure_logfire(instrument_pydantic_ai=True)
     bridge = HttpBridge(url=bridge_url, run_id=run_id, token=bridge_token)
     adapter = PydanticAdapter(
@@ -247,6 +247,17 @@ def _temporary_environment(secrets: Mapping[str, object]):
 
 def _requires_native_sandbox(source: str) -> bool:
     return "pydantic_monty" in source or _SANDBOX_IMPORT_RE.search(source) is not None
+
+
+def _playground_executor_class() -> type[Any]:
+    try:
+        from kedi.executors import PlaygroundExecutor
+
+        return PlaygroundExecutor
+    except ImportError:
+        from kedi.executors import PyodideExecutor
+
+        return PyodideExecutor
 
 
 __all__ = ["PythonRuntime", "run_provider_host", "run_webgpu_host"]
