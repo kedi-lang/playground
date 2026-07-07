@@ -69,6 +69,7 @@ const ui = {
   customEnvList: document.querySelector("#custom-env-list"),
   runSettingsPanel: document.querySelector("#run-settings-panel"),
   modelSettingsPanel: document.querySelector("#model-settings-panel"),
+  modelSettingsNotice: document.querySelector("#model-settings-notice"),
   modelsPanel: document.querySelector("#models-panel"),
   settingTemperature: document.querySelector("#setting-temperature"),
   settingMaxTokens: document.querySelector("#setting-max-tokens"),
@@ -334,6 +335,7 @@ function setMode(mode) {
   ui.localControls.hidden = mode !== "local";
   ui.byokControls.hidden = mode !== "byok";
   ui.sourceControls.hidden = mode !== "local";
+  updateModelSettingsLock(mode);
   if (mode === "local") {
     updateSourceControls();
   }
@@ -508,7 +510,7 @@ async function runByok() {
         runId,
         pythonRuntime: selectedPythonRuntime(),
         secrets,
-        settings: modelSettings(),
+        settings: {},
       }),
       signal: controller.signal,
     });
@@ -1127,6 +1129,16 @@ function applyModelSettings(settings = {}) {
   for (const [name, , input] of modelSettingFields()) {
     input.value = values[name] ?? "";
   }
+}
+
+function updateModelSettingsLock(mode = selectedMode()) {
+  const locked = mode === "byok";
+  ui.modelSettingsPanel.dataset.locked = String(locked);
+  ui.modelSettingsNotice.hidden = !locked;
+  for (const [, , input] of modelSettingFields()) {
+    input.disabled = locked;
+  }
+  ui.resetModelSettings.disabled = locked;
 }
 
 function modelSettings() {

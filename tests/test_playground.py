@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import re
 import sys
@@ -302,6 +303,76 @@ def test_nsjail_worker_environment_is_minimal_and_secret_free(
     assert "LOGFIRE_TOKEN" not in env
 
 
+def test_nsjail_pool_self_tests_workers_before_pooling(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Worker:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    checked: list[Worker] = []
+    pool = nsjail.NsJailPool(size=1)
+    worker = Worker()
+    monkeypatch.setattr(pool, "_new_worker", lambda: worker)
+    monkeypatch.setattr(pool, "_self_test", lambda item: checked.append(item))
+
+    assert pool._new_checked_worker() is worker
+    assert checked == [worker]
+    assert worker.closed is False
+
+    bad_pool = nsjail.NsJailPool(size=1)
+    bad_worker = Worker()
+    monkeypatch.setattr(bad_pool, "_new_worker", lambda: bad_worker)
+    monkeypatch.setattr(
+        bad_pool,
+        "_self_test",
+        lambda _item: (_ for _ in ()).throw(RuntimeError("worker failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="worker failed"):
+        bad_pool._new_checked_worker()
+    assert bad_worker.closed is True
+
+
+def test_nsjail_worker_reports_closed_pipe_as_worker_failure() -> None:
+    class BrokenStdin:
+        def write(self, _value: str) -> None:
+            raise BrokenPipeError
+
+        def flush(self) -> None:
+            raise AssertionError("flush should not run after a broken write")
+
+    class Process:
+        def __init__(self) -> None:
+            self.stdin = BrokenStdin()
+            self.stdout = io.StringIO()
+            self.stderr = io.StringIO("worker died\n")
+            self.polls = 0
+
+        def poll(self) -> int | None:
+            self.polls += 1
+            return None if self.polls == 1 else 1
+
+        def terminate(self) -> None:
+            pass
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 1
+
+        def kill(self) -> None:
+            pass
+
+    worker = object.__new__(nsjail.NsJailWorker)
+    worker._process = Process()
+    worker._lock = threading.Lock()
+    worker._closed = False
+
+    with pytest.raises(RuntimeError, match="worker died"):
+        worker.request({"action": "evaluate_inline"}, timeout=1)
+    assert worker._closed is True
+
+
 def test_local_runtime_rejects_native_sandbox_requirements_without_nsjail() -> None:
     assert local_runtime._requires_native_sandbox("> import: sandbox\n= ok")
     assert local_runtime._requires_native_sandbox("```\nimport pydantic_monty\n```")
@@ -464,6 +535,12 @@ def test_byok_model_requirements_report_provider_key_names() -> None:
 
 
 def test_model_settings_payload_accepts_only_shared_adapter_settings() -> None:
+    static_source = (Path(server.__file__).parent / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    static_html = (Path(server.__file__).parent / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
     settings = server.ModelSettingsPayload(
         temperature=0.2,
         max_tokens=64,
@@ -478,6 +555,9 @@ def test_model_settings_payload_accepts_only_shared_adapter_settings() -> None:
         "seed": 42,
     }
     assert server.ModelSettingsPayload().as_dict() == {}
+    assert "settings: {}" in static_source
+    assert "updateModelSettingsLock(mode);" in static_source
+    assert "BYOK runs use provider defaults" in static_html
     with pytest.raises(ValueError):
         server.ModelSettingsPayload(temperature=1.01)
     with pytest.raises(ValueError):
@@ -1418,7 +1498,10 @@ def test_model_downloads_are_browser_owned() -> None:
     assert 'id="setting-max-tokens"' in index_source
     assert 'id="setting-top-p"' in index_source
     assert 'id="setting-seed"' in index_source
-    assert app_source.count("settings: modelSettings()") == 2
+    assert app_source.count("settings: modelSettings()") == 1
+    assert "settings: {}" in app_source
+    assert "BYOK runs use provider defaults" in index_source
+    assert "updateModelSettingsLock(mode);" in app_source
     assert 'class="example-tabs"' in index_source
     assert index_source.count('data-example="') == 5
     assert "sourceEditor.setValue(source)" in app_source

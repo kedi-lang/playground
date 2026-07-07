@@ -67,9 +67,18 @@ class NsJailWorker:
             raise RuntimeError("NsJail worker is closed")
         if self._process.stdin is None or self._process.stdout is None:
             raise RuntimeError("NsJail worker pipes are not available")
+        if self._process.poll() is not None:
+            message = self._worker_failure_message("NsJail worker exited before request")
+            self.close()
+            raise RuntimeError(message)
         with self._lock:
-            self._process.stdin.write(json.dumps(dict(payload), separators=(",", ":")) + "\n")
-            self._process.stdin.flush()
+            try:
+                self._process.stdin.write(json.dumps(dict(payload), separators=(",", ":")) + "\n")
+                self._process.stdin.flush()
+            except BrokenPipeError as exc:
+                message = self._worker_failure_message("NsJail worker pipe closed")
+                self.close()
+                raise RuntimeError(message) from exc
             ready, _, _ = select.select([self._process.stdout], [], [], timeout)
             if not ready:
                 self.close()
@@ -101,8 +110,29 @@ class NsJailWorker:
             return ""
         if self._process.poll() is None:
             return ""
-        ready, _, _ = select.select([stream], [], [], 0)
-        return stream.readline().strip() if ready else ""
+        lines: list[str] = []
+        try:
+            while True:
+                ready, _, _ = select.select([stream], [], [], 0)
+                if not ready:
+                    break
+                line = stream.readline()
+                if not line:
+                    break
+                lines.append(line.rstrip())
+        except (OSError, TypeError, ValueError):
+            text = stream.read()
+            return text.strip() if text else ""
+        return "\n".join(lines).strip()
+
+    def _worker_failure_message(self, fallback: str) -> str:
+        stderr = self._read_stderr()
+        if stderr:
+            return stderr
+        return_code = self._process.poll()
+        if return_code is None:
+            return fallback
+        return f"{fallback} with exit code {return_code}"
 
 
 class NsJailPool:
@@ -136,8 +166,7 @@ class NsJailPool:
             self._last_error = "NsJail disabled by KEDI_NSJAIL_ENABLED"
             return
         try:
-            worker = self._new_worker()
-            self._self_test(worker)
+            worker = self._new_checked_worker()
         except Exception as exc:  # noqa: BLE001 - pool availability is best-effort.
             self._last_error = str(exc)
             return
@@ -177,7 +206,7 @@ class NsJailPool:
 
         def target() -> None:
             try:
-                worker = self._new_worker()
+                worker = self._new_checked_worker()
             except Exception as exc:  # noqa: BLE001 - keep the pool alive with fewer workers.
                 self._last_error = str(exc)
                 return
@@ -195,6 +224,15 @@ class NsJailPool:
         env = worker_environment()
         command = nsjail_command(env)
         return NsJailWorker(command, env=env)
+
+    def _new_checked_worker(self) -> NsJailWorker:
+        worker = self._new_worker()
+        try:
+            self._self_test(worker)
+        except Exception:
+            worker.close()
+            raise
+        return worker
 
     def _self_test(self, worker: NsJailWorker) -> None:
         response = worker.request(
