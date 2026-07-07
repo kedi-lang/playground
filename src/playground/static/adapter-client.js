@@ -1,11 +1,13 @@
 import { PyodideRuntime } from "./pyodide-runtime.js";
 
 export class AdapterClient {
-  constructor(runtime, onStatus, io = {}, python = null, loadRuntime = null) {
+  constructor(runtime, onStatus, io = {}, python = null, loadRuntime = null, events = {}) {
     this.runtime = runtime;
     this.onStatus = onStatus;
     this.python = python ?? new PyodideRuntime(onStatus, io);
     this.loadRuntime = loadRuntime;
+    this.events = events;
+    this.seenToolMessages = new Set();
   }
 
   async serve(runId, signal) {
@@ -34,9 +36,31 @@ export class AdapterClient {
   async handle(runId, request, signal) {
     if (request.operation === "python") {
       this.onStatus("Running Python sandbox");
+      this.events.onFallback?.();
+      const cardId = this.events.onEvent?.({
+        kind: "python",
+        title: "Python sandbox",
+        body: request.action || "Executing Python",
+        state: "running",
+      });
       try {
-        await postResponse(runId, request.id, await this.python.execute(request));
+        const response = await this.python.execute(request);
+        this.events.onEvent?.({
+          id: cardId,
+          kind: "python",
+          title: "Python sandbox",
+          body: response.stdout || response.stderr || request.action || "Python completed",
+          state: "done",
+        });
+        await postResponse(runId, request.id, response);
       } catch (error) {
+        this.events.onEvent?.({
+          id: cardId,
+          kind: "python",
+          title: "Python sandbox",
+          body: error?.message || String(error),
+          state: "error",
+        });
         await postResponse(runId, request.id, {
           ok: false,
           errorType: error?.name || "PyodideError",
@@ -54,7 +78,14 @@ export class AdapterClient {
       return;
     }
     this.onStatus(`Generating ${fieldNames(request.outputSchema)}`);
+    this.emitToolResultCards(request.messages);
     const messages = browserMessages(request);
+    const modelCardId = this.events.onEvent?.({
+      kind: "model",
+      title: `Model: ${request.model}`,
+      body: fieldNames(request.outputSchema),
+      state: "running",
+    });
     try {
       const generation = normalizeGeneration(
         await runtime.generate({
@@ -72,6 +103,21 @@ export class AdapterClient {
         request.tools,
         request.messages.some((message) => message.role === "tool"),
       );
+      this.events.onEvent?.({
+        id: modelCardId,
+        kind: "model",
+        title: `Model: ${generation.model || request.model}`,
+        body: response.kind === "tool_call" ? "Requested a tool call" : "Generated final output",
+        state: "done",
+      });
+      if (response.kind === "tool_call") {
+        this.events.onEvent?.({
+          kind: "tool",
+          title: `Tool call: ${response.name}`,
+          body: JSON.stringify(response.arguments ?? {}, null, 2),
+          state: "running",
+        });
+      }
       response.telemetry = {
         inputMessages: messages,
         outputText: generation.text,
@@ -85,6 +131,13 @@ export class AdapterClient {
       };
       await postResponse(runId, request.id, response);
     } catch (error) {
+      this.events.onEvent?.({
+        id: modelCardId,
+        kind: "model",
+        title: `Model: ${request.model}`,
+        body: error?.message ?? String(error),
+        state: "error",
+      });
       await postResponse(runId, request.id, {
         kind: "error",
         error: error?.message ?? String(error),
@@ -93,6 +146,25 @@ export class AdapterClient {
           model: request.model,
           finishReason: "error",
         },
+      });
+    }
+  }
+
+  emitToolResultCards(messages) {
+    for (const message of messages ?? []) {
+      if (message.role !== "tool") {
+        continue;
+      }
+      const key = message.toolCallId || `${message.name}:${message.content}`;
+      if (this.seenToolMessages.has(key)) {
+        continue;
+      }
+      this.seenToolMessages.add(key);
+      this.events.onEvent?.({
+        kind: "tool",
+        title: `Tool result: ${message.name || "tool"}`,
+        body: message.content,
+        state: "done",
       });
     }
   }

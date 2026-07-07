@@ -382,17 +382,48 @@ def test_tutorial_examples_are_parseable_and_tool_usage_stays_focused() -> None:
             re.DOTALL | re.MULTILINE,
         )
     )
-    assert set(examples) == {"capital", "contact", "delivery"}
-    assert sum("> use:" in source for source in examples.values()) == 1
+    assert set(examples) == {"capital", "contact", "delivery", "codemode"}
+    assert sum("> use:" in source for source in examples.values()) == 2
     assert all("[" in source and "]" in source for source in examples.values())
+    assert "Capital of <country> is [capital]" in examples["capital"]
+    assert "> import: sandbox" in examples["codemode"]
+    assert "> use: sandbox" in examples["codemode"]
     assert "Contact extraction" in (
         Path(server.__file__).parent / "static" / "index.html"
     ).read_text(encoding="utf-8")
     assert "Delivery tool" in (Path(server.__file__).parent / "static" / "index.html").read_text(
         encoding="utf-8"
     )
+    assert "CodeMode" in (Path(server.__file__).parent / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
     for source in examples.values():
         parse_program(source, source_path="<tutorial>")
+
+
+def test_webgpu_tool_schema_resolves_builtin_kedi_annotations() -> None:
+    from kedi.agent_adapter.utils import kedi_procedure_tool_spec
+
+    source = "@delivery_estimate(city: str) -> str:\n  = Delivery to <city> takes 3 days.\n"
+    program = parse_program(source, source_path="<tool-schema>")
+    runtime = compile_program(program)
+    spec = kedi_procedure_tool_spec(runtime, program.procedures[0])
+
+    assert spec.json_schema is not None
+    assert spec.json_schema["properties"]["city"]["type"] == "string"
+    assert spec.return_schema == {"type": "string"}
+
+
+def test_byok_model_requirements_report_provider_key_names() -> None:
+    assert server._pydantic_model_env_requirements("openrouter:google/gemini-3-flash-preview") == [
+        {"anyOf": ["OPENROUTER_API_KEY"], "label": "OPENROUTER_API_KEY"}
+    ]
+    assert server._pydantic_model_env_requirements("openai:gpt-4o-mini") == [
+        {
+            "anyOf": ["OPENAI_API_KEY", "OPENAI_ADMIN_KEY"],
+            "label": "OPENAI_API_KEY or OPENAI_ADMIN_KEY",
+        }
+    ]
 
 
 def test_model_settings_payload_accepts_only_shared_adapter_settings() -> None:
@@ -1241,7 +1272,8 @@ def test_model_downloads_are_browser_owned() -> None:
     assert "const pythonRuntime = new PyodideRuntime(setStatus, browserIo())" in app_source
     assert "pythonRuntime.preload()" in app_source
     assert "requestIdleCallback(preload" in app_source
-    assert "browserIo(), pythonRuntime" in app_source
+    assert "browserIo()," in app_source
+    assert "pythonRuntime," in app_source
     assert 'setStatus("Loading model");' in app_source
     assert "await runtime.load(config, renderProgress, signal);" in app_source
     assert 'setStatus("Loading model");\n  await runtime.load(config' not in app_source
@@ -1344,7 +1376,7 @@ def test_model_downloads_are_browser_owned() -> None:
     assert 'id="setting-seed"' in index_source
     assert app_source.count("settings: modelSettings()") == 2
     assert 'class="example-tabs"' in index_source
-    assert index_source.count('data-example="') == 3
+    assert index_source.count('data-example="') == 5
     assert "sourceEditor.setValue(source)" in app_source
 
 

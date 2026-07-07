@@ -3,6 +3,7 @@ import {
   clearKediExecutionDiagnostic,
   createKediEditor,
   setKediExecutionDiagnostic,
+  setKediTips,
 } from "./kedi-editor.js";
 import { MODEL_REGISTRY, modelConfig as builtinModelConfig } from "./model-registry.js";
 import { PyodideRuntime } from "./pyodide-runtime.js";
@@ -11,19 +12,27 @@ import { TransformersRuntime } from "./runtimes/transformers-runtime.js";
 import { WllamaRuntime } from "./runtimes/wllama-runtime.js";
 
 const EXAMPLES = Object.freeze({
-  capital: `>> Give me a [country]
->> What's the [capital] of <country>?
+  capital: `>> Give me a [country].
+>> Capital of <country> is [capital].
 = Capital of <country> is <capital>.`,
-  contact: `>> From "Aylin Kaya is a product designer based in Berlin", extract her [name], [role], and [city].
+  contact: `>> In "Aylin Kaya is a product designer based in Berlin", the person is [name], the role is [role], and the city is [city].
 = <name> works as a <role> in <city>.`,
   delivery: `@delivery_estimate(city: str) -> str:
   = Delivery to <city> takes 3 business days.
 
-> use: delivery_estimate
+> use:
+  delivery_estimate
 
->> Choose a European [city], call delivery_estimate with it, and return the [estimate].
+>> Pick a European [city].
+>> Use delivery_estimate. Delivery estimate for <city> is [estimate].
 = <estimate>`,
+  codemode: `> import: sandbox
+> use: sandbox
+
+>> Use the sandbox to run Python that finds all prime numbers under 20 and sums their squares. The numeric result is [answer: int].
+= Sum of squared primes under 20 is <answer>.`,
 });
+const BLANK_EXAMPLE = "blank";
 const DEFAULT_SOURCE = EXAMPLES.capital;
 const ENV_KEY = "kedi.playground.env";
 const SESSION_KEY = "kedi.playground.session";
@@ -78,6 +87,10 @@ const ui = {
   addBrowserModel: document.querySelector("#add-browser-model"),
   browserModelFeedback: document.querySelector("#browser-model-feedback"),
   browserModelList: document.querySelector("#browser-model-list"),
+  tipPanel: document.querySelector("#tip-panel"),
+  tipList: document.querySelector("#tip-list"),
+  fallbackNotice: document.querySelector("#fallback-notice"),
+  executionStream: document.querySelector("#execution-stream"),
   stdinForm: document.querySelector("#stdin-form"),
   stdinInput: document.querySelector("#stdin-input"),
   stdinEof: document.querySelector("#stdin-eof"),
@@ -90,18 +103,34 @@ let activeDownload = null;
 let activeModelSource = "cache";
 let cacheCheckId = 0;
 let pendingStdin = null;
+let activeExample = "capital";
+let blankSource = "";
+let fallbackNoticeTimer = null;
 const pythonRuntime = new PyodideRuntime(setStatus, browserIo());
 
 const initialSession = sessionValues();
+const initialSource = initialSession.source || DEFAULT_SOURCE;
+blankSource =
+  typeof initialSession.blankSource === "string"
+    ? initialSession.blankSource
+    : exampleKeyForSource(initialSource)
+      ? ""
+      : initialSource;
+activeExample =
+  initialSession.activeExample === BLANK_EXAMPLE
+    ? BLANK_EXAMPLE
+    : EXAMPLES[initialSession.activeExample]
+      ? initialSession.activeExample
+      : exampleKeyForSource(initialSource) || "capital";
 const sourceEditor = await createKediEditor(
   ui.source,
-  initialSession.source || DEFAULT_SOURCE,
+  activeExample === BLANK_EXAMPLE ? blankSource : EXAMPLES[activeExample],
   (source) => {
-    saveSession({ source });
-    updateExampleTabs(source);
+    handleSourceChange(source);
   },
 );
-updateExampleTabs(sourceEditor.getValue());
+updateExampleTabs();
+updateTips(sourceEditor.getValue());
 let customByokModels = Array.isArray(initialSession.customByokModels)
   ? initialSession.customByokModels.filter(isByokModel)
   : [];
@@ -153,12 +182,7 @@ function schedulePythonPreload() {
 function bindEvents() {
   for (const tab of document.querySelectorAll("[data-example]")) {
     tab.addEventListener("click", () => {
-      const source = EXAMPLES[tab.dataset.example];
-      if (!source) {
-        return;
-      }
-      sourceEditor.setValue(source);
-      sourceEditor.focus();
+      selectExample(tab.dataset.example);
     });
   }
   for (const tab of document.querySelectorAll("[data-control-tab]")) {
@@ -171,6 +195,7 @@ function bindEvents() {
     input.addEventListener("change", () => {
       setMode(input.value);
       saveSession({ mode: input.value });
+      updateTips(sourceEditor.getValue());
     });
   }
   ui.model.addEventListener("change", handleBrowserModelChange);
@@ -235,9 +260,47 @@ function bindEvents() {
   });
 }
 
-function updateExampleTabs(source) {
+function selectExample(key) {
+  if (key === BLANK_EXAMPLE) {
+    activeExample = BLANK_EXAMPLE;
+    sourceEditor.setValue(blankSource);
+    saveSession({ activeExample, source: blankSource, blankSource });
+    updateExampleTabs();
+    updateTips(blankSource);
+    sourceEditor.focus();
+    return;
+  }
+  const source = EXAMPLES[key];
+  if (!source) {
+    return;
+  }
+  activeExample = key;
+  sourceEditor.setValue(source);
+  saveSession({ activeExample, source });
+  updateExampleTabs();
+  updateTips(source);
+  sourceEditor.focus();
+}
+
+function handleSourceChange(source) {
+  if (activeExample !== BLANK_EXAMPLE && EXAMPLES[activeExample] !== source) {
+    activeExample = BLANK_EXAMPLE;
+  }
+  if (activeExample === BLANK_EXAMPLE) {
+    blankSource = source;
+  }
+  saveSession({ source, activeExample, blankSource });
+  updateExampleTabs();
+  updateTips(source);
+}
+
+function exampleKeyForSource(source) {
+  return Object.entries(EXAMPLES).find(([, value]) => value === source)?.[0] ?? null;
+}
+
+function updateExampleTabs() {
   for (const tab of document.querySelectorAll("[data-example]")) {
-    const selected = EXAMPLES[tab.dataset.example] === source;
+    const selected = tab.dataset.example === activeExample;
     tab.classList.toggle("active", selected);
     tab.setAttribute("aria-selected", String(selected));
   }
@@ -256,6 +319,7 @@ function setMode(mode) {
   }
   setStatus("Ready");
   setProgress("");
+  updateTips(sourceEditor.getValue());
 }
 
 function setControlTab(tabName) {
@@ -272,15 +336,52 @@ function setControlTab(tabName) {
 
 async function run() {
   const started = performance.now();
+  const mode = selectedMode();
+  try {
+    if (mode === "byok") {
+      await ensureSelectedByokSecrets();
+    }
+  } catch (error) {
+    clearResult();
+    ui.error.hidden = false;
+    ui.error.textContent = error?.message ?? String(error);
+    addExecutionCard({
+      kind: "error",
+      title: "Missing environment key",
+      body: error?.message ?? String(error),
+      state: "error",
+    });
+    setStatus("Failed");
+    ui.timing.textContent = `${Math.round(performance.now() - started)}ms`;
+    return;
+  }
   setRunning(true);
   clearResult();
+  addExecutionCard({
+    kind: "run",
+    title: "Kedi run",
+    body: mode === "local" ? "Browser-backed execution" : "BYOK execution",
+    state: "running",
+  });
   try {
-    const result = selectedMode() === "local" ? await runLocal() : await runByok();
+    const result = mode === "local" ? await runLocal() : await runByok();
     ui.output.textContent = result.result;
+    addExecutionCard({
+      kind: "output",
+      title: "Output",
+      body: result.result || "(no output)",
+      state: "done",
+    });
     setStatus("Complete");
   } catch (error) {
     ui.error.hidden = false;
     ui.error.textContent = error?.message ?? String(error);
+    addExecutionCard({
+      kind: "error",
+      title: "Error",
+      body: error?.message ?? String(error),
+      state: "error",
+    });
     setKediExecutionDiagnostic(sourceEditor, error?.diagnostic);
     setStatus("Failed");
   } finally {
@@ -326,6 +427,7 @@ async function runLocal() {
           setProgress("Model loaded");
           return runtime;
         },
+    executionEvents(),
   );
   const bridge = client.serve(runId, controller.signal);
   activeRun.bridgeStarted = true;
@@ -351,10 +453,7 @@ async function runLocal() {
 }
 
 async function runByok() {
-  const model =
-    activeByokModelSource === "custom"
-      ? ui.byokCustomModel.value
-      : ui.byokModel.value;
+  const model = selectedByokModel();
   if (!model) {
     throw new Error("Enter a BYOK model");
   }
@@ -369,7 +468,14 @@ async function runByok() {
   const runId = crypto.randomUUID();
   const controller = new AbortController();
   activeRun = { runId, controller, bridgeStarted: true };
-  const client = new AdapterClient(null, setStatus, browserIo(), pythonRuntime);
+  const client = new AdapterClient(
+    null,
+    setStatus,
+    browserIo(),
+    pythonRuntime,
+    null,
+    executionEvents(),
+  );
   const bridge = client.serve(runId, controller.signal);
   try {
     const result = await fetchJSON("/api/run/byok", {
@@ -390,6 +496,22 @@ async function runByok() {
   } finally {
     controller.abort();
   }
+}
+
+async function ensureSelectedByokSecrets() {
+  const model = selectedByokModel();
+  if (!model) {
+    throw new Error("Enter a BYOK model");
+  }
+  const values = envValues();
+  validateLogfireEnvironment(values);
+  await ensureByokSecrets(model, values);
+}
+
+function selectedByokModel() {
+  return activeByokModelSource === "custom"
+    ? ui.byokCustomModel.value
+    : ui.byokModel.value;
 }
 
 function sourceDefinitelyDoesNotNeedModel(source) {
@@ -413,6 +535,24 @@ function validateLogfireEnvironment(values) {
   if (values.LOGFIRE_ENABLED === "true" && !values.LOGFIRE_TOKEN) {
     throw new Error("LOGFIRE_TOKEN is required when Logfire is enabled");
   }
+}
+
+async function ensureByokSecrets(model, values) {
+  const payload = await fetchJSON("/api/byok/models/requirements", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model }),
+  });
+  const missing = (payload.requirements ?? []).filter(
+    (requirement) =>
+      !Array.isArray(requirement.anyOf) ||
+      !requirement.anyOf.some((name) => typeof values[name] === "string" && values[name]),
+  );
+  if (!missing.length) {
+    return;
+  }
+  const names = missing.map((requirement) => requirement.label || requirement.anyOf?.join(" or "));
+  throw new Error(`Set ${names.join(", ")} in Environment before running ${model}.`);
 }
 
 async function cancel() {
@@ -728,6 +868,7 @@ function clearResult() {
   ui.output.textContent = "";
   ui.error.textContent = "";
   ui.error.hidden = true;
+  ui.executionStream.replaceChildren();
   ui.timing.textContent = "";
   closeStdin();
 }
@@ -743,6 +884,20 @@ function browserIo() {
 function appendProgramOutput(value) {
   ui.output.textContent += value;
   ui.output.scrollTop = ui.output.scrollHeight;
+  const existing = ui.executionStream.querySelector('[data-card-id="stdio"]');
+  if (existing) {
+    const body = existing.querySelector(".execution-card-body");
+    body.textContent += value;
+    ui.executionStream.scrollTop = ui.executionStream.scrollHeight;
+    return;
+  }
+  addExecutionCard({
+    id: "stdio",
+    kind: "python",
+    title: "Program output",
+    body: value,
+    state: "done",
+  });
 }
 
 function requestStdin() {
@@ -803,6 +958,108 @@ function setStatus(message) {
 function setProgress(message) {
   ui.progress.textContent = message;
   ui.progress.hidden = !message;
+}
+
+function executionEvents() {
+  return {
+    onEvent: addExecutionCard,
+    onFallback: showPyodideFallback,
+  };
+}
+
+function addExecutionCard(event) {
+  const id = event.id || crypto.randomUUID();
+  let card = ui.executionStream.querySelector(`[data-card-id="${CSS.escape(id)}"]`);
+  if (!card) {
+    card = document.createElement("article");
+    card.className = "execution-card";
+    card.dataset.cardId = id;
+    card.innerHTML = [
+      '<div class="execution-card-title">',
+      "  <span data-title></span>",
+      '  <span class="execution-card-kind" data-kind></span>',
+      "</div>",
+      '<div class="execution-card-body" data-body></div>',
+    ].join("");
+    ui.executionStream.append(card);
+  }
+  card.dataset.state = event.state || "running";
+  card.querySelector("[data-title]").textContent = event.title || "Step";
+  card.querySelector("[data-kind]").textContent = event.kind || "";
+  card.querySelector("[data-body]").textContent = event.body || "";
+  ui.executionStream.scrollTop = ui.executionStream.scrollHeight;
+  return id;
+}
+
+function showPyodideFallback() {
+  ui.fallbackNotice.hidden = false;
+  clearTimeout(fallbackNoticeTimer);
+  fallbackNoticeTimer = setTimeout(() => {
+    ui.fallbackNotice.hidden = true;
+  }, 4_000);
+}
+
+function updateTips(source) {
+  const tips = analyzeSourceTips(source);
+  ui.tipPanel.hidden = tips.length === 0;
+  ui.tipList.replaceChildren(
+    ...tips.map((tip) => {
+      const card = document.createElement("article");
+      card.className = "tip-card";
+      const title = document.createElement("strong");
+      title.textContent = tip.title;
+      const body = document.createElement("span");
+      body.textContent = tip.message;
+      card.append(title, body);
+      return card;
+    }),
+  );
+  setKediTips(sourceEditor, tips);
+}
+
+function analyzeSourceTips(source) {
+  const lines = source.split(/\r?\n/);
+  const tips = [];
+  const localWebGpu = selectedMode() === "local";
+  const useLine = lines.findIndex((line) => /^\s*>\s*use:/.test(line));
+  const importsSandbox = lines.some((line) => /^\s*>\s*import:\s*sandbox\s*$/.test(line));
+  const usesSandbox = lines.some((line) => /^\s*>\s*use:\s*sandbox\s*$/.test(line));
+  if (localWebGpu && useLine >= 0) {
+    tips.push({
+      line: useLine + 1,
+      column: 1,
+      title: "Tool calls on WebGPU",
+      message:
+        "Local WebGPU tool calls can be slow and less accurate. Use BYOK for tool-heavy programs.",
+    });
+  }
+  if (localWebGpu && (importsSandbox || usesSandbox)) {
+    const importLine = lines.findIndex((item) =>
+      /^\s*>\s*import:\s*sandbox\s*$/.test(item),
+    );
+    const useLine = lines.findIndex((item) => /^\s*>\s*use:\s*sandbox\s*$/.test(item));
+    const line = importLine >= 0 ? importLine : useLine;
+    tips.push({
+      line: line >= 0 ? line + 1 : 1,
+      column: 1,
+      title: "Sandbox accuracy",
+      message:
+        "CodeMode and sandbox tasks are more reliable with BYOK models than small local WebGPU models.",
+    });
+  }
+  const templateLines = lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => /^\s*>>/.test(line));
+  if (templateLines.length > 1) {
+    tips.push({
+      line: templateLines[1].index + 1,
+      column: 1,
+      title: "Batch independent prompts",
+      message:
+        "If these generations are independent, combining them into one template block reduces model calls.",
+    });
+  }
+  return tips;
 }
 
 function envValues() {

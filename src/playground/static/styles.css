@@ -200,9 +200,20 @@ h1 {
   content: "";
 }
 
+.monaco-editor .kedi-tip-glyph::before {
+  display: block;
+  width: 7px;
+  height: 7px;
+  margin: 8px auto 0;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px rgb(65 182 230 / 18%);
+  content: "";
+}
+
 .run-pane {
   display: grid;
-  grid-template-rows: auto auto auto minmax(240px, 1fr);
+  grid-template-rows: auto auto auto auto auto minmax(240px, 1fr);
   min-width: 0;
   border-left: 1px solid var(--line);
 }
@@ -649,11 +660,127 @@ h1 {
   font-size: 0.72rem;
 }
 
+.tip-panel {
+  display: grid;
+  gap: 7px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #141821;
+}
+
+.tip-panel-heading {
+  color: var(--faint);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tip-list {
+  display: grid;
+  gap: 6px;
+}
+
+.tip-card {
+  display: grid;
+  gap: 3px;
+  border-left: 2px solid var(--accent);
+  padding: 7px 9px;
+  color: var(--muted);
+  background: #11151d;
+  font-size: 0.72rem;
+  line-height: 1.42;
+}
+
+.tip-card strong {
+  color: #dce7f4;
+  font-size: 0.7rem;
+}
+
+.fallback-notice {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  color: #d8ecf5;
+  background: #102734;
+  font-size: 0.72rem;
+}
+
+.fallback-notice strong {
+  color: #9cdef7;
+}
+
 .result {
   position: relative;
   display: grid;
   grid-template-rows: 40px minmax(0, 1fr) auto;
   min-height: 0;
+}
+
+.execution-stream {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+  background: #151922;
+}
+
+.execution-card {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 2px;
+  padding: 9px 10px;
+  color: #d9deea;
+  background: #11151d;
+}
+
+.execution-card[data-state="error"] {
+  border-color: #70313d;
+  border-left-color: var(--danger);
+  color: #ffb2bb;
+  background: var(--danger-surface);
+}
+
+.execution-card[data-state="done"] {
+  border-left-color: var(--success);
+}
+
+.execution-card.muted {
+  border-left-color: var(--line-strong);
+  color: var(--faint);
+}
+
+.execution-card-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.execution-card-kind {
+  color: var(--faint);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.execution-card-body {
+  overflow: auto;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.74rem;
+  line-height: 1.48;
+  white-space: pre-wrap;
 }
 
 textarea,

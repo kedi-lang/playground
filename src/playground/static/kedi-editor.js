@@ -12,6 +12,7 @@ let monacoPromise;
 let languageRegistered = false;
 let workerUrl;
 const executionDecorations = new WeakMap();
+const tipDecorations = new WeakMap();
 const highlighters = new WeakMap();
 const treeSitterResources = preloadKediTreeSitterResources();
 
@@ -152,6 +153,55 @@ export function clearKediExecutionDiagnostic(editor) {
     globalThis.monaco.editor.setModelMarkers(model, "kedi-runtime", []);
   }
   executionDecorations.get(editor)?.clear();
+}
+
+export function setKediTips(editor, tips) {
+  const monaco = globalThis.monaco;
+  const model = editor.getModel();
+  if (!monaco || !model) {
+    return;
+  }
+  const markers = [];
+  const decorations = [];
+  for (const tip of tips) {
+    const line = Math.min(Math.max(Number(tip.line) || 1, 1), model.getLineCount());
+    const maxColumn = model.getLineMaxColumn(line);
+    const column = Math.min(Math.max(Number(tip.column) || 1, 1), maxColumn);
+    const message = tip.message || tip.title || "Kedi tip";
+    markers.push({
+      severity: monaco.MarkerSeverity.Hint,
+      message,
+      source: "Kedi tip",
+      startLineNumber: line,
+      startColumn: column,
+      endLineNumber: line,
+      endColumn: Math.min(column + 1, maxColumn),
+    });
+    decorations.push({
+      range: new monaco.Range(line, 1, line, maxColumn),
+      options: {
+        isWholeLine: false,
+        glyphMarginClassName: "kedi-tip-glyph",
+        glyphMarginHoverMessage: { value: message },
+        overviewRuler: {
+          color: "#41b6e6",
+          position: monaco.editor.OverviewRulerLane.Right,
+        },
+      },
+    });
+  }
+  monaco.editor.setModelMarkers(model, "kedi-tips", markers);
+  const collection = tipDecorations.get(editor) ?? editor.createDecorationsCollection();
+  tipDecorations.set(editor, collection);
+  collection.set(decorations);
+}
+
+export function clearKediTips(editor) {
+  const model = editor.getModel();
+  if (model && globalThis.monaco) {
+    globalThis.monaco.editor.setModelMarkers(model, "kedi-tips", []);
+  }
+  tipDecorations.get(editor)?.clear();
 }
 
 async function loadMonaco() {

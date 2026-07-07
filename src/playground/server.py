@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import secrets
 import threading
 from argparse import ArgumentParser
@@ -250,6 +251,21 @@ async def validate_byok_model(payload: PydanticModelValidationPayload) -> JSONRe
         return _error_response(exc)
 
 
+@app.post("/api/byok/models/requirements")
+async def byok_model_requirements(payload: PydanticModelValidationPayload) -> JSONResponse:
+    try:
+        model = _validate_pydantic_model_name(payload.model)
+        return JSONResponse(
+            {
+                "ok": True,
+                "model": model,
+                "requirements": _pydantic_model_env_requirements(model),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - validation errors cross an API boundary.
+        return _error_response(exc)
+
+
 @app.get("/api/bridge/request")
 async def bridge_request(runId: str) -> dict[str, Any]:
     run = BRIDGES.get_or_create(runId)
@@ -413,6 +429,42 @@ def _validate_pydantic_model_name(model: str) -> str:
         if message.startswith(("Unknown provider:", "Unknown model:")):
             raise ValueError(message) from exc
     return model
+
+
+def _pydantic_model_env_requirements(model: str) -> list[dict[str, Any]]:
+    provider = model.partition(":")[0]
+    provider_requirements: dict[str, list[list[str]]] = {
+        "anthropic": [["ANTHROPIC_API_KEY"]],
+        "azure": [["AZURE_OPENAI_API_KEY"]],
+        "cohere": [["CO_API_KEY"]],
+        "google": [["GEMINI_API_KEY", "GOOGLE_API_KEY"]],
+        "google-gla": [["GEMINI_API_KEY", "GOOGLE_API_KEY"]],
+        "groq": [["GROQ_API_KEY"]],
+        "mistral": [["MISTRAL_API_KEY"]],
+        "openai": [["OPENAI_API_KEY", "OPENAI_ADMIN_KEY"]],
+        "openrouter": [["OPENROUTER_API_KEY"]],
+    }
+    groups = provider_requirements.get(provider)
+    if groups is None:
+        groups = _infer_missing_env_groups_from_pydantic(model)
+    return [
+        {
+            "anyOf": group,
+            "label": " or ".join(group),
+        }
+        for group in groups
+    ]
+
+
+def _infer_missing_env_groups_from_pydantic(model: str) -> list[list[str]]:
+    from pydantic_ai.models import infer_model
+
+    try:
+        infer_model(model)
+    except Exception as exc:  # noqa: BLE001 - provider messages carry env var names.
+        names = sorted(set(re.findall(r"\b[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN)\b", str(exc))))
+        return [[name] for name in names]
+    return []
 
 
 app.mount("/", StaticFiles(directory=STATIC_ROOT, html=True), name="static")

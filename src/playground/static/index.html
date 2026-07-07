@@ -60,6 +60,15 @@
                 type="button"
                 role="tab"
                 aria-selected="false"
+                data-example="blank"
+              >
+                Blank
+              </button>
+              <button
+                class="example-tab"
+                type="button"
+                role="tab"
+                aria-selected="false"
                 data-example="capital"
               >
                 Capital
@@ -81,6 +90,15 @@
                 data-example="delivery"
               >
                 Delivery tool
+              </button>
+              <button
+                class="example-tab"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                data-example="codemode"
+              >
+                CodeMode
               </button>
             </div>
           </div>
@@ -328,9 +346,24 @@
             <span id="progress" hidden></span>
           </div>
 
+          <section id="tip-panel" class="tip-panel" hidden aria-label="Kedi tips">
+            <div class="tip-panel-heading">Tips</div>
+            <div id="tip-list" class="tip-list"></div>
+          </section>
+
+          <div id="fallback-notice" class="fallback-notice" hidden role="status">
+            <strong>Pyodide fallback</strong>
+            <span>Python is running in the browser. First load can be slower.</span>
+          </div>
+
           <div class="result">
             <div class="pane-heading">Output</div>
-            <pre id="output">Waiting for run.</pre>
+            <div id="execution-stream" class="execution-stream" aria-live="polite">
+              <article class="execution-card muted">
+                <div class="execution-card-title">Waiting for run</div>
+              </article>
+            </div>
+            <pre id="output" hidden>Waiting for run.</pre>
             <form id="stdin-form" class="stdin-form" hidden>
               <span class="stdin-label">stdin</span>
               <input
