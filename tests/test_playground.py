@@ -373,6 +373,87 @@ def test_nsjail_worker_reports_closed_pipe_as_worker_failure() -> None:
     assert worker._closed is True
 
 
+def test_nsjail_worker_ignores_protocol_noise_before_marked_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Stdin:
+        def write(self, _value: str) -> None:
+            pass
+
+        def flush(self) -> None:
+            pass
+
+    class Process:
+        stdin = Stdin()
+        stdout = io.StringIO(
+            "null\n"
+            '"native stdout noise"\n'
+            f'{nsjail.RESPONSE_PREFIX}{{"ok":true,"result":"done"}}\n'
+        )
+        stderr = io.StringIO()
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            raise AssertionError("healthy worker should not be closed")
+
+    monkeypatch.setattr(nsjail.select, "select", lambda r, _w, _x, _t: (r, [], []))
+
+    worker = object.__new__(nsjail.NsJailWorker)
+    worker._process = Process()
+    worker._lock = threading.Lock()
+    worker._closed = False
+
+    assert worker.request({"action": "evaluate_inline"}, timeout=1) == {
+        "ok": True,
+        "result": "done",
+    }
+    assert worker._closed is False
+
+
+def test_nsjail_worker_rejects_marked_non_object_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Stdin:
+        def write(self, _value: str) -> None:
+            pass
+
+        def flush(self) -> None:
+            pass
+
+    class Process:
+        stdin = Stdin()
+        stdout = io.StringIO(f"{nsjail.RESPONSE_PREFIX}[]\n")
+        stderr = io.StringIO()
+        terminated = False
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 1
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(nsjail.select, "select", lambda r, _w, _x, _t: (r, [], []))
+
+    process = Process()
+    worker = object.__new__(nsjail.NsJailWorker)
+    worker._process = process
+    worker._lock = threading.Lock()
+    worker._closed = False
+
+    with pytest.raises(RuntimeError, match="malformed response"):
+        worker.request({"action": "evaluate_inline"}, timeout=1)
+    assert process.terminated is True
+    assert worker._closed is True
+
+
 def test_local_runtime_rejects_native_sandbox_requirements_without_nsjail() -> None:
     assert local_runtime._requires_native_sandbox("> import: sandbox\n= ok")
     assert local_runtime._requires_native_sandbox("```\nimport pydantic_monty\n```")

@@ -10,12 +10,14 @@ import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
+from time import monotonic as _monotonic
 from typing import Any
 
 from playground import sandbox_worker
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PLAYGROUND_ROOT = PACKAGE_ROOT.parents[1]
+RESPONSE_PREFIX = sandbox_worker._RESPONSE_PREFIX
 
 DEFAULT_POOL_SIZE = 10
 DEFAULT_TIMEOUT = 60.0
@@ -28,6 +30,7 @@ _NETWORK_DENY_SECCOMP = (
     "getsockname, getpeername, sendto, recvfrom, sendmsg, recvmsg, shutdown "
     "} DEFAULT ALLOW"
 )
+_MAX_NOISE_LINES = 3
 _NAMESPACE_DISABLE_FLAGS = [
     "--disable_clone_newnet",
     "--disable_clone_newuser",
@@ -79,19 +82,7 @@ class NsJailWorker:
                 message = self._worker_failure_message("NsJail worker pipe closed")
                 self.close()
                 raise RuntimeError(message) from exc
-            ready, _, _ = select.select([self._process.stdout], [], [], timeout)
-            if not ready:
-                self.close()
-                raise TimeoutError("Timed out waiting for NsJail worker")
-            line = self._process.stdout.readline()
-            if not line:
-                stderr = self._read_stderr()
-                self.close()
-                raise RuntimeError(stderr or "NsJail worker exited without a response")
-            response = json.loads(line)
-            if not isinstance(response, dict):
-                raise TypeError("NsJail worker response must be an object")
-            return response
+            return self._read_response(timeout)
 
     def close(self) -> None:
         if self._closed:
@@ -124,6 +115,39 @@ class NsJailWorker:
             text = stream.read()
             return text.strip() if text else ""
         return "\n".join(lines).strip()
+
+    def _read_response(self, timeout: float) -> Mapping[str, Any]:
+        assert self._process.stdout is not None
+        deadline = timeout + _monotonic()
+        noise: list[str] = []
+        while True:
+            remaining = deadline - _monotonic()
+            if remaining <= 0:
+                self.close()
+                suffix = _protocol_noise_suffix(noise)
+                raise TimeoutError(f"Timed out waiting for NsJail worker{suffix}")
+            ready, _, _ = select.select([self._process.stdout], [], [], remaining)
+            if not ready:
+                self.close()
+                suffix = _protocol_noise_suffix(noise)
+                raise TimeoutError(f"Timed out waiting for NsJail worker{suffix}")
+            line = self._process.stdout.readline()
+            if not line:
+                stderr = self._read_stderr()
+                self.close()
+                suffix = _protocol_noise_suffix(noise)
+                raise RuntimeError(stderr or f"NsJail worker exited without a response{suffix}")
+            if not line.startswith(RESPONSE_PREFIX):
+                noise.append(line.rstrip())
+                continue
+            response = json.loads(line.removeprefix(RESPONSE_PREFIX))
+            if not isinstance(response, dict):
+                self.close()
+                raise RuntimeError(
+                    "NsJail worker returned a malformed response"
+                    f"{_protocol_noise_suffix(noise)}"
+                )
+            return response
 
     def _worker_failure_message(self, fallback: str) -> str:
         stderr = self._read_stderr()
@@ -297,6 +321,16 @@ def _env_args(env: Mapping[str, str]) -> list[str]:
     for name, value in sorted(env.items()):
         args.extend(["--env", f"{name}={value}"])
     return args
+
+
+def _protocol_noise_suffix(noise: list[str]) -> str:
+    if not noise:
+        return ""
+    preview = "; ".join(repr(line[:200]) for line in noise[-_MAX_NOISE_LINES:])
+    hidden = len(noise) - _MAX_NOISE_LINES
+    if hidden > 0:
+        return f" after ignoring {hidden} earlier protocol noise line(s): {preview}"
+    return f" after protocol noise: {preview}"
 
 
 def sandbox_root() -> str:

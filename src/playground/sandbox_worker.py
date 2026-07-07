@@ -15,6 +15,7 @@ import typing_extensions
 from pydantic import BaseModel
 
 _REFERENCE_KEY = "__kedi_playground_ref__"
+_RESPONSE_PREFIX = "__KEDI_PLAYGROUND_RESPONSE__"
 _OBJECT_REGISTRY: dict[str, Any] = {}
 
 
@@ -225,7 +226,7 @@ def main() -> None:
                 "stdout": "",
                 "stderr": "",
             }
-        sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
+        sys.stdout.write(_RESPONSE_PREFIX + json.dumps(response, separators=(",", ":")) + "\n")
         sys.stdout.flush()
 
 
