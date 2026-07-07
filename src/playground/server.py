@@ -18,11 +18,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from playground.bridge import BridgeManager
 from playground.execution import execution_error_payload
-from playground.local_runtime import run_webgpu_host
+from playground.local_runtime import PythonRuntime, run_provider_host, run_webgpu_host
 from playground.models import MODEL_BY_ID, browser_model, public_model_registry
 from playground.nsjail import NsJailPool
 from playground.pyright import PyrightServer
-from playground.worker import run_provider
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = PACKAGE_ROOT / "static"
@@ -125,6 +124,7 @@ class LocalRunPayload(_CamelPayload):
     model_id: str = Field(alias="modelId")
     browser_model: BrowserModelPayload | None = Field(default=None, alias="modelConfig")
     run_id: str = Field(alias="runId")
+    python_runtime: PythonRuntime = Field(default="server", alias="pythonRuntime")
     secrets: dict[str, str] = Field(default_factory=dict)
     settings: ModelSettingsPayload = Field(default_factory=ModelSettingsPayload)
 
@@ -133,6 +133,7 @@ class ByokRunPayload(BaseModel):
     source: str
     model: str
     run_id: str = Field(alias="runId")
+    python_runtime: PythonRuntime = Field(default="server", alias="pythonRuntime")
     secrets: dict[str, str] = Field(default_factory=dict)
     settings: ModelSettingsPayload = Field(default_factory=ModelSettingsPayload)
 
@@ -339,6 +340,7 @@ async def local_run(payload: LocalRunPayload, request: Request) -> JSONResponse:
                 bridge_url=bridge_url,
                 bridge_token=bridge_token,
                 nsjail_pool=NSJAIL_POOL,
+                python_runtime=payload.python_runtime,
             )
         return JSONResponse(result, status_code=200 if result.get("ok") else 400)
     except Exception as exc:  # noqa: BLE001 - API boundary formats Kedi failures.
@@ -354,7 +356,7 @@ async def byok_run(payload: ByokRunPayload, request: Request) -> JSONResponse:
     try:
         with _internal_bridge(payload.run_id, request) as (bridge_url, bridge_token):
             result = await asyncio.to_thread(
-                run_provider,
+                run_provider_host,
                 source=payload.source,
                 model=payload.model,
                 secrets=payload.secrets,
@@ -362,6 +364,8 @@ async def byok_run(payload: ByokRunPayload, request: Request) -> JSONResponse:
                 run_id=payload.run_id,
                 bridge_url=bridge_url,
                 bridge_token=bridge_token,
+                nsjail_pool=NSJAIL_POOL,
+                python_runtime=payload.python_runtime,
             )
         return JSONResponse(result, status_code=200 if result.get("ok") else 400)
     except Exception as exc:  # noqa: BLE001 - API boundary returns a compact error.

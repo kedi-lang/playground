@@ -171,6 +171,20 @@
                 </div>
               </div>
 
+              <div class="mode-group python-runtime-group">
+                <span class="group-label">Python runtime</span>
+                <div class="segmented">
+                  <label>
+                    <input type="radio" name="python-runtime" value="server" checked />
+                    <span>Server sandbox</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="python-runtime" value="browser" />
+                    <span>Pyodide</span>
+                  </label>
+                </div>
+              </div>
+
               <div id="local-controls">
                 <label class="field">
                   <span>Model</span>
@@ -352,8 +366,8 @@
           </section>
 
           <div id="fallback-notice" class="fallback-notice" hidden role="status">
-            <strong>Pyodide fallback</strong>
-            <span>Python is running in the browser. First load can be slower.</span>
+            <strong>Pyodide runtime</strong>
+            <span>Python is running in the browser because Pyodide is selected.</span>
           </div>
 
           <div class="result">

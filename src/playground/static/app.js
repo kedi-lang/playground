@@ -152,8 +152,14 @@ installHuggingFaceAuth();
 bindEvents();
 const initialMode = initialSession.mode === "byok" ? "byok" : "local";
 document.querySelector(`input[name="mode"][value="${initialMode}"]`).checked = true;
+const initialPythonRuntime = initialSession.pythonRuntime === "browser" ? "browser" : "server";
+document.querySelector(
+  `input[name="python-runtime"][value="${initialPythonRuntime}"]`,
+).checked = true;
 setMode(initialMode);
-schedulePythonPreload();
+if (initialPythonRuntime === "browser") {
+  schedulePythonPreload();
+}
 loadByokModels();
 
 function schedulePythonPreload() {
@@ -196,6 +202,16 @@ function bindEvents() {
       setMode(input.value);
       saveSession({ mode: input.value });
       updateTips(sourceEditor.getValue());
+    });
+  }
+  for (const input of document.querySelectorAll('input[name="python-runtime"]')) {
+    input.addEventListener("change", () => {
+      saveSession({ pythonRuntime: input.value });
+      if (input.value === "browser") {
+        schedulePythonPreload();
+      } else {
+        ui.fallbackNotice.hidden = true;
+      }
     });
   }
   ui.model.addEventListener("change", handleBrowserModelChange);
@@ -308,6 +324,10 @@ function updateExampleTabs() {
 
 function selectedMode() {
   return document.querySelector('input[name="mode"]:checked')?.value ?? "local";
+}
+
+function selectedPythonRuntime() {
+  return document.querySelector('input[name="python-runtime"]:checked')?.value ?? "server";
 }
 
 function setMode(mode) {
@@ -440,6 +460,7 @@ async function runLocal() {
         modelId,
         modelConfig: MODEL_REGISTRY[modelId] ? null : baseConfig,
         runId,
+        pythonRuntime: selectedPythonRuntime(),
         secrets,
         settings: modelSettings(),
       }),
@@ -485,6 +506,7 @@ async function runByok() {
         source: sourceEditor.getValue(),
         model,
         runId,
+        pythonRuntime: selectedPythonRuntime(),
         secrets,
         settings: modelSettings(),
       }),
@@ -963,7 +985,7 @@ function setProgress(message) {
 function executionEvents() {
   return {
     onEvent: addExecutionCard,
-    onFallback: showPyodideFallback,
+    onPython: showPyodideRuntimeNotice,
   };
 }
 
@@ -991,7 +1013,10 @@ function addExecutionCard(event) {
   return id;
 }
 
-function showPyodideFallback() {
+function showPyodideRuntimeNotice() {
+  if (selectedPythonRuntime() !== "browser") {
+    return;
+  }
   ui.fallbackNotice.hidden = false;
   clearTimeout(fallbackNoticeTimer);
   fallbackNoticeTimer = setTimeout(() => {

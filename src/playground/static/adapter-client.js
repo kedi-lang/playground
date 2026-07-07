@@ -36,7 +36,7 @@ export class AdapterClient {
   async handle(runId, request, signal) {
     if (request.operation === "python") {
       this.onStatus("Running Python sandbox");
-      this.events.onFallback?.();
+      this.events.onPython?.(request);
       const cardId = this.events.onEvent?.({
         kind: "python",
         title: "Python sandbox",

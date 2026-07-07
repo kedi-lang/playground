@@ -308,7 +308,7 @@ def test_local_runtime_rejects_native_sandbox_requirements_without_nsjail() -> N
     assert not local_runtime._requires_native_sandbox("> import: this\n= ok")
 
 
-def test_local_runtime_python_bridge_lazily_uses_nsjail_or_browser_fallback() -> None:
+def test_local_runtime_python_bridge_uses_explicit_python_runtime() -> None:
     class Worker:
         def request(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
             return {"ok": True, "backend": "nsjail", "payload": payload, "timeout": timeout}
@@ -343,6 +343,7 @@ def test_local_runtime_python_bridge_lazily_uses_nsjail_or_browser_fallback() ->
         browser_bridge=BrowserBridge(),  # type: ignore[arg-type]
         nsjail_pool=pool_with_worker,  # type: ignore[arg-type]
         requires_native_sandbox=False,
+        python_runtime="server",
     )
     assert pool_with_worker.leases == 0
     assert bridge.request({"action": "evaluate_inline"}, timeout=1)["backend"] == "nsjail"
@@ -350,20 +351,56 @@ def test_local_runtime_python_bridge_lazily_uses_nsjail_or_browser_fallback() ->
     assert pool_with_worker.lease_context.closed
 
     pool_without_worker = Pool(None)
-    fallback = local_runtime._RunPythonBridge(
+    unavailable = local_runtime._RunPythonBridge(
         browser_bridge=BrowserBridge(),  # type: ignore[arg-type]
         nsjail_pool=pool_without_worker,  # type: ignore[arg-type]
         requires_native_sandbox=False,
+        python_runtime="server",
     )
-    assert fallback.request({"action": "evaluate_inline"}, timeout=1)["backend"] == "browser"
+    with pytest.raises(RuntimeError, match="Server Python sandbox is unavailable"):
+        unavailable.request({"action": "evaluate_inline"}, timeout=1)
+
+    browser = local_runtime._RunPythonBridge(
+        browser_bridge=BrowserBridge(),  # type: ignore[arg-type]
+        nsjail_pool=pool_without_worker,  # type: ignore[arg-type]
+        requires_native_sandbox=False,
+        python_runtime="browser",
+    )
+    assert browser.request({"action": "evaluate_inline"}, timeout=1)["backend"] == "browser"
 
     native = local_runtime._RunPythonBridge(
         browser_bridge=BrowserBridge(),  # type: ignore[arg-type]
         nsjail_pool=Pool(None, last_error="nsjail self-test failed"),  # type: ignore[arg-type]
         requires_native_sandbox=True,
+        python_runtime="server",
     )
     with pytest.raises(RuntimeError, match="nsjail self-test failed"):
         native.request({"action": "evaluate_inline"}, timeout=1)
+
+    native_browser = local_runtime._RunPythonBridge(
+        browser_bridge=BrowserBridge(),  # type: ignore[arg-type]
+        nsjail_pool=Pool(None),  # type: ignore[arg-type]
+        requires_native_sandbox=True,
+        python_runtime="browser",
+    )
+    with pytest.raises(RuntimeError, match="not supported by the Pyodide runtime"):
+        native_browser.request({"action": "evaluate_inline"}, timeout=1)
+
+
+def test_provider_host_runs_static_program_without_browser_python() -> None:
+    result = local_runtime.run_provider_host(
+        source="= ok",
+        model="test",
+        secrets={},
+        settings={},
+        run_id="run",
+        bridge_url="http://127.0.0.1/internal",
+        bridge_token="bridge-token",
+        nsjail_pool=None,
+        python_runtime="server",
+    )
+
+    assert result == {"ok": True, "result": "ok"}
 
 
 def test_tutorial_examples_are_parseable_and_tool_usage_stays_focused() -> None:
@@ -1247,7 +1284,7 @@ def test_model_downloads_are_browser_owned() -> None:
         worker_source
     )
     assert "Loading Monty sandbox" not in worker_source
-    assert "pydantic_monty is not supported by the Pyodide fallback" in worker_source
+    assert "pydantic_monty is not supported by the Pyodide runtime" in worker_source
     assert "import pydantic_monty" not in worker_source
     assert 'pydantic_monty.Monty("1 + 2").run() == 3' not in worker_source
     assert '"opentelemetry-api==1.41.1"' in worker_source
@@ -1271,6 +1308,13 @@ def test_model_downloads_are_browser_owned() -> None:
     assert 'type: "ready_error"' in worker_source
     assert "const pythonRuntime = new PyodideRuntime(setStatus, browserIo())" in app_source
     assert "pythonRuntime.preload()" in app_source
+    assert 'input[name="python-runtime"]' in app_source
+    assert 'initialPythonRuntime === "browser"' in app_source
+    assert "onPython: showPyodideRuntimeNotice" in app_source
+    assert "onFallback" not in app_source
+    assert 'name="python-runtime"' in index_source
+    assert "Server sandbox" in index_source
+    assert "Pyodide runtime" in index_source
     assert "requestIdleCallback(preload" in app_source
     assert "browserIo()," in app_source
     assert "pythonRuntime," in app_source

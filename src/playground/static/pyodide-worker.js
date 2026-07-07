@@ -26,7 +26,7 @@ async function ensureOptionalPackages(pyodide, request) {
   const serialized = JSON.stringify(request);
   if (serialized.includes("pydantic_monty")) {
     throw new Error(
-      "pydantic_monty is not supported by the Pyodide fallback; use server sandbox execution",
+      "pydantic_monty is not supported by the Pyodide runtime; use server sandbox execution",
     );
   }
   if (serialized.includes("logfire")) {

@@ -5,7 +5,7 @@ import re
 import threading
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager, nullcontext
-from typing import Any
+from typing import Any, Literal
 
 from opentelemetry.trace import get_tracer
 
@@ -16,6 +16,7 @@ from playground.worker_process import HttpBridge, _configure_logfire
 
 _SANDBOX_IMPORT_RE = re.compile(r"(?m)^\s*>\s*import:\s*sandbox\s*$")
 _ENV_LOCK = threading.Lock()
+PythonRuntime = Literal["server", "browser"]
 
 
 def run_webgpu_host(
@@ -29,6 +30,7 @@ def run_webgpu_host(
     bridge_url: str,
     bridge_token: str,
     nsjail_pool: NsJailPool | None,
+    python_runtime: PythonRuntime = "server",
 ) -> dict[str, Any]:
     with _temporary_environment(secrets):
         return _run_webgpu_host_in_environment(
@@ -40,6 +42,32 @@ def run_webgpu_host(
             bridge_url=bridge_url,
             bridge_token=bridge_token,
             nsjail_pool=nsjail_pool,
+            python_runtime=python_runtime,
+        )
+
+
+def run_provider_host(
+    *,
+    source: str,
+    model: str,
+    secrets: Mapping[str, object],
+    settings: Mapping[str, object],
+    run_id: str,
+    bridge_url: str,
+    bridge_token: str,
+    nsjail_pool: NsJailPool | None,
+    python_runtime: PythonRuntime = "server",
+) -> dict[str, Any]:
+    with _temporary_environment(secrets):
+        return _run_provider_host_in_environment(
+            source=source,
+            model=model,
+            settings=settings,
+            run_id=run_id,
+            bridge_url=bridge_url,
+            bridge_token=bridge_token,
+            nsjail_pool=nsjail_pool,
+            python_runtime=python_runtime,
         )
 
 
@@ -53,6 +81,7 @@ def _run_webgpu_host_in_environment(
     bridge_url: str,
     bridge_token: str,
     nsjail_pool: NsJailPool | None,
+    python_runtime: PythonRuntime,
 ) -> dict[str, Any]:
     from kedi.agent_adapter.webgpu import WebGPUAdapter
     from kedi.executors import PlaygroundExecutor
@@ -87,6 +116,7 @@ def _run_webgpu_host_in_environment(
         browser_bridge=bridge,
         nsjail_pool=nsjail_pool,
         requires_native_sandbox=_requires_native_sandbox(source),
+        python_runtime=python_runtime,
     )
     try:
         executor = PlaygroundExecutor(python_bridge)
@@ -104,6 +134,47 @@ def _run_webgpu_host_in_environment(
         python_bridge.close()
 
 
+def _run_provider_host_in_environment(
+    *,
+    source: str,
+    model: str,
+    settings: Mapping[str, object],
+    run_id: str,
+    bridge_url: str,
+    bridge_token: str,
+    nsjail_pool: NsJailPool | None,
+    python_runtime: PythonRuntime,
+) -> dict[str, Any]:
+    from kedi.agent_adapter.adapters import PydanticAdapter
+    from kedi.executors import PlaygroundExecutor
+    from kedi.lang import compile_program, parse_program
+    from kedi.model_normalization import normalize_for_pydantic_ai
+
+    _configure_logfire(instrument_pydantic_ai=True)
+    bridge = HttpBridge(url=bridge_url, run_id=run_id, token=bridge_token)
+    adapter = PydanticAdapter(
+        model=normalize_for_pydantic_ai(model),
+        model_settings=settings,
+    )
+    python_bridge = _RunPythonBridge(
+        browser_bridge=bridge,
+        nsjail_pool=nsjail_pool,
+        requires_native_sandbox=_requires_native_sandbox(source),
+        python_runtime=python_runtime,
+    )
+    try:
+        executor = PlaygroundExecutor(python_bridge)
+        program = parse_program(source, source_path="<playground>")
+        runtime = compile_program(program, adapter=adapter, executor=executor)
+        result = runtime.run_main()
+        return {
+            "ok": True,
+            "result": format_execution_output(executor.drain_stdout(), result),
+        }
+    finally:
+        python_bridge.close()
+
+
 class _RunPythonBridge:
     def __init__(
         self,
@@ -111,20 +182,26 @@ class _RunPythonBridge:
         browser_bridge: HttpBridge,
         nsjail_pool: NsJailPool | None,
         requires_native_sandbox: bool,
+        python_runtime: PythonRuntime,
     ) -> None:
         self._browser_bridge = browser_bridge
         self._pool = nsjail_pool
         self._requires_native_sandbox = requires_native_sandbox
+        self._python_runtime = python_runtime
         self._lease_context: Any = None
         self._worker: Any = None
-        self._fallback_to_browser = False
 
     def request(self, payload: Mapping[str, Any], *, timeout: float) -> Mapping[str, Any]:
-        if self._worker is None and not self._fallback_to_browser:
+        if self._python_runtime == "browser":
+            if self._requires_native_sandbox:
+                raise RuntimeError(
+                    "pydantic_monty is not supported by the Pyodide runtime; "
+                    "select the server sandbox runtime for sandbox imports"
+                )
+            return self._browser_bridge.request(payload, timeout=timeout)
+        if self._worker is None:
             self._select_backend()
-        if self._worker is not None:
-            return self._worker.request(payload, timeout=timeout)
-        return self._browser_bridge.request(payload, timeout=timeout)
+        return self._worker.request(payload, timeout=timeout)
 
     def close(self) -> None:
         if self._lease_context is None:
@@ -147,11 +224,9 @@ class _RunPythonBridge:
             last_error = self._pool.last_error or last_error
         if self._requires_native_sandbox:
             detail = f": {last_error}" if last_error else ""
-            raise RuntimeError(
-                "pydantic_monty is not supported by the Pyodide fallback; "
-                f"server sandbox execution is unavailable{detail}"
-            )
-        self._fallback_to_browser = True
+            raise RuntimeError(f"Server sandbox execution is required but unavailable{detail}")
+        detail = f": {last_error}" if last_error else ""
+        raise RuntimeError(f"Server Python sandbox is unavailable{detail}")
 
 
 @contextmanager
@@ -174,4 +249,4 @@ def _requires_native_sandbox(source: str) -> bool:
     return "pydantic_monty" in source or _SANDBOX_IMPORT_RE.search(source) is not None
 
 
-__all__ = ["run_webgpu_host"]
+__all__ = ["PythonRuntime", "run_provider_host", "run_webgpu_host"]
