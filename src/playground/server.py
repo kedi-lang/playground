@@ -253,7 +253,9 @@ async def validate_byok_model(payload: PydanticModelValidationPayload) -> JSONRe
 
 
 @app.post("/api/byok/models/requirements")
-async def byok_model_requirements(payload: PydanticModelValidationPayload) -> JSONResponse:
+async def byok_model_requirements(
+    payload: PydanticModelValidationPayload,
+) -> JSONResponse:
     try:
         model = _validate_pydantic_model_name(payload.model)
         return JSONResponse(

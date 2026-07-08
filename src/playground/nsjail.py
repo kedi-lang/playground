@@ -185,7 +185,12 @@ class NsJailPool:
         if self.size < 1:
             self._last_error = "NsJail pool size is less than 1"
             return
-        if os.environ.get("KEDI_NSJAIL_ENABLED", "1").lower() in {"0", "false", "off", "no"}:
+        if os.environ.get("KEDI_NSJAIL_ENABLED", "1").lower() in {
+            "0",
+            "false",
+            "off",
+            "no",
+        }:
             self._last_error = "NsJail disabled by KEDI_NSJAIL_ENABLED"
             return
         try:
@@ -370,7 +375,14 @@ def worker_environment() -> dict[str, str]:
         "HOME": "/tmp",
         "LD_LIBRARY_PATH": "/usr/local/lib:/usr/lib:/lib",
     }
-    for name in ("LANG", "LC_ALL", "PATH", "PYTHONPATH", "SSL_CERT_DIR", "SSL_CERT_FILE"):
+    for name in (
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "PYTHONPATH",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+    ):
         value = os.environ.get(name)
         if value:
             env[name] = value

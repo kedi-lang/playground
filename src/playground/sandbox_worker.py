@@ -173,7 +173,11 @@ def execute_request(request: Mapping[str, Any]) -> dict[str, Any]:
         exec(compiled, _USER_NAMESPACE, _USER_NAMESPACE)
         result = None
     elif action == "execute_prelude":
-        exec(compile(code, "<kedi-sandbox:prelude>", "exec"), _USER_NAMESPACE, _USER_NAMESPACE)
+        exec(
+            compile(code, "<kedi-sandbox:prelude>", "exec"),
+            _USER_NAMESPACE,
+            _USER_NAMESPACE,
+        )
         result = None
     elif action == "evaluate_type_expression":
         compiled = compile(code, "<kedi-sandbox:type>", "eval")

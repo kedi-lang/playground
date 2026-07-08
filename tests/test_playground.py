@@ -303,7 +303,9 @@ def test_nsjail_worker_environment_is_minimal_and_secret_free(
     assert "LOGFIRE_TOKEN" not in env
 
 
-def test_nsjail_pool_self_tests_workers_before_pooling(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_nsjail_pool_self_tests_workers_before_pooling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class Worker:
         def __init__(self) -> None:
             self.closed = False
@@ -461,7 +463,12 @@ def test_local_runtime_rejects_native_sandbox_requirements_without_nsjail() -> N
 def test_local_runtime_python_bridge_uses_explicit_python_runtime() -> None:
     class Worker:
         def request(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
-            return {"ok": True, "backend": "nsjail", "payload": payload, "timeout": timeout}
+            return {
+                "ok": True,
+                "backend": "nsjail",
+                "payload": payload,
+                "timeout": timeout,
+            }
 
     class Lease:
         def __init__(self, worker: Worker | None) -> None:
@@ -486,7 +493,12 @@ def test_local_runtime_python_bridge_uses_explicit_python_runtime() -> None:
 
     class BrowserBridge:
         def request(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
-            return {"ok": True, "backend": "browser", "payload": payload, "timeout": timeout}
+            return {
+                "ok": True,
+                "backend": "browser",
+                "payload": payload,
+                "timeout": timeout,
+            }
 
     pool_with_worker = Pool(Worker())
     bridge = local_runtime._RunPythonBridge(
@@ -973,7 +985,9 @@ def test_worker_validates_input_and_redacts_failure(
         )
 
 
-def test_provider_worker_contract_and_invalid_output(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_provider_worker_contract_and_invalid_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: dict[str, Any] = {}
 
     def run(*args: Any, **kwargs: Any) -> Any:
