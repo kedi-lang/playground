@@ -7,7 +7,7 @@
 ;
 ; Injection sites:
 ;   - `python_code`  — the body of a triple-backtick fenced block
-;                       (top-level python_block, assign_block_stmt
+;                       (top-level python_block, variable_init_block_stmt
 ;                       RHS, return_block_stmt value).
 ;   - `python_inline_body` — between single backticks for
 ;                       inline_python_expr (and the body of a
