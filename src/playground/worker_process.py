@@ -78,7 +78,7 @@ def _configure_logfire(*, instrument_pydantic_ai: bool) -> bool:
 
 def execute(payload: dict[str, Any]) -> dict[str, Any]:
     from kedi.agent_adapter.adapters import PydanticAdapter
-    from kedi.agent_adapter.webgpu import WebGPUAdapter
+    from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
     from kedi.executors import PyodideExecutor
     from kedi.lang import compile_program, parse_program
     from kedi.model_normalization import normalize_for_pydantic_ai

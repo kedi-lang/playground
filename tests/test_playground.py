@@ -78,7 +78,7 @@ def test_model_registry_is_public_and_rejects_unknown_model() -> None:
 
 
 def test_webgpu_adapter_is_not_called_for_llm_free_programs() -> None:
-    from kedi.agent_adapter.webgpu import WebGPUAdapter
+    from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
 
     class RecordingBridge:
         def __init__(self) -> None:
@@ -88,7 +88,7 @@ def test_webgpu_adapter_is_not_called_for_llm_free_programs() -> None:
             self.requests.append(dict(payload))
             raise AssertionError(f"unexpected browser model request: {payload!r}")
 
-    for source in ("= ok", ">> hello\n= ok"):
+    for source in ("= ok", '[value: str] = `"ok"`\n= <value>'):
         bridge = RecordingBridge()
         adapter = WebGPUAdapter(
             bridge,
@@ -161,7 +161,9 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert "wasm32-unknown-emscripten" not in workflow
     assert "Smoke-test wheel in real Pyodide" not in workflow
     assert 'folder_path=".space"' in workflow
-    assert workflow.count("uses: actions/checkout@v4") == 2
+    assert (
+        workflow.count("uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6") == 2
+    )
     assert "needs: verify" in workflow
     assert 'space_sdk="docker"' in workflow
     assert "api.add_space_secret(" in workflow
@@ -1185,7 +1187,7 @@ def test_worker_process_configures_logfire_only_when_enabled(
 def test_worker_process_uses_direct_webgpu_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import kedi.agent_adapter.webgpu as webgpu_module
+    import kedi.agent_adapter.adapters.webgpu as webgpu_module
 
     captured: dict[str, Any] = {}
 
