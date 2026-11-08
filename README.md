@@ -25,14 +25,11 @@ Run that workflow manually first when no artifact is available.
 
 ## Docker
 
-The default development image installs the `stable` branch from the private
-Kedi repository:
+The default development image installs the `stable` branch from the Kedi
+repository:
 
 ```bash
-KEDI_GITHUB_TOKEN="$(gh auth token)" \
-  docker build \
-  --secret id=KEDI_GITHUB_TOKEN,env=KEDI_GITHUB_TOKEN \
-  -t kedi-playground .
+docker build -t kedi-playground .
 docker run --rm -p 7860:7860 kedi-playground
 ```
 
@@ -51,9 +48,7 @@ Production mode installs the latest published `kedi[playground]` from PyPI:
 docker build --build-arg KEDI_INSTALL_MODE=prod -t kedi-playground:prod .
 ```
 
-The GitHub token is mounted as a BuildKit secret only for dependency
-installation and is not stored in an image layer. The container listens on port
-`7860` and runs as user `1000`.
+The container listens on port `7860` and runs as user `1000`.
 
 ## Hugging Face Space
 
@@ -64,14 +59,12 @@ pushes to Hugging Face.
 Configure the GitHub repository with:
 
 - Repository secret `HF_TOKEN`: a Hugging Face token with write access.
-- Repository secret `KEDI_GITHUB_TOKEN`: a read-only token for the private
-  `kedi-lang/kedi` repository.
 - Repository variable `HF_SPACE_ID`: the target Space as `owner/space`.
 
 The workflow builds and tests a Pyodide-compatible `pydantic-monty` wheel,
-creates the Docker Space when needed, installs `KEDI_GITHUB_TOKEN` as an HF
-Space build secret, then uploads a production staging directory. Hugging Face
-rebuilds the Space after each upload.
+creates the Docker Space when needed, then uploads a production staging
+directory pinned to the current Kedi `stable` commit. Hugging Face rebuilds the
+Space after each upload.
 
 ## Runtime behavior
 

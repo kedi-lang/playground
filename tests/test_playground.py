@@ -114,7 +114,8 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert "ARG KEDI_INSTALL_MODE=dev" in dockerfile
     assert "ARG KEDI_REVISION=stable" in dockerfile
     assert "build-essential" in dockerfile
-    assert "--mount=type=secret,id=KEDI_GITHUB_TOKEN,required=false" in dockerfile
+    assert "KEDI_GITHUB_TOKEN" not in dockerfile
+    assert "x-access-token" not in dockerfile
     assert '"kedi[playground]"' in dockerfile
     assert '"kedi[playground] @ git+${KEDI_REPOSITORY}@${KEDI_REVISION}"' in dockerfile
     assert "KEDI_INSTALL_MODE must be prod or dev" in dockerfile
@@ -148,7 +149,8 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     assert not readme.startswith("---")
     assert "`HF_TOKEN`" in readme
     assert "`HF_SPACE_ID`" in readme
-    assert "`KEDI_GITHUB_TOKEN`" in readme
+    assert "KEDI_GITHUB_TOKEN" not in readme
+    assert "KEDI_GITHUB_TOKEN" not in workflow
     assert "Prepare Hugging Face Space metadata" in workflow
     assert "https://api.github.com/repos/kedi-lang/kedi/commits/stable" in workflow
     assert 'kedi_revision = json.loads(response.read())["sha"]' in workflow
@@ -166,7 +168,7 @@ def test_health_endpoint_and_space_container_configuration() -> None:
     )
     assert "needs: verify" in workflow
     assert 'space_sdk="docker"' in workflow
-    assert "api.add_space_secret(" in workflow
+    assert "add_space_secret(" not in workflow
 
 
 def test_nsjail_command_uses_empty_chroot_readonly_binds_and_nobody_user(

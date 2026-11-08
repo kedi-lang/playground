@@ -12,25 +12,15 @@ ARG KEDI_INSTALL_MODE=dev
 ARG KEDI_REPOSITORY=https://github.com/kedi-lang/kedi.git
 ARG KEDI_REVISION=stable
 
-RUN --mount=type=secret,id=KEDI_GITHUB_TOKEN,required=false \
-    set -eu; \
+RUN set -eu; \
     uv venv /opt/venv; \
     if [ "$KEDI_INSTALL_MODE" = "prod" ]; then \
         uv pip install --python /opt/venv/bin/python --compile-bytecode "kedi[playground]"; \
     elif [ "$KEDI_INSTALL_MODE" = "dev" ]; then \
-        if [ ! -s /run/secrets/KEDI_GITHUB_TOKEN ]; then \
-            echo "KEDI_GITHUB_TOKEN is required for a dev build" >&2; \
-            exit 2; \
-        fi; \
-        token="$(cat /run/secrets/KEDI_GITHUB_TOKEN)"; \
-        git config --global \
-            url."https://x-access-token:${token}@github.com/".insteadOf \
-            "https://github.com/"; \
         uv pip install \
             --python /opt/venv/bin/python \
             --compile-bytecode \
             "kedi[playground] @ git+${KEDI_REPOSITORY}@${KEDI_REVISION}"; \
-        rm -f /root/.gitconfig; \
     else \
         echo "KEDI_INSTALL_MODE must be prod or dev" >&2; \
         exit 2; \
