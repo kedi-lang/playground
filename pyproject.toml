@@ -9,6 +9,15 @@ description = "Browser-first playground for the Kedi language"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
+authors = [
+    {name = "Mert Sırakaya", email = "mert@kedi-lang.org"},
+    {name = "Doğukan Yiğit Polat", email = "yigit@neurograph.net"},
+]
+# PyPI shows only the first author and the first maintainer, so the two lists differ in order.
+maintainers = [
+    {name = "Doğukan Yiğit Polat", email = "yigit@neurograph.net"},
+    {name = "Mert Sırakaya", email = "mert@kedi-lang.org"},
+]
 dependencies = [
     "kedi[playground]>=0.4,<0.5",
     "pydantic-monty==0.0.21",
